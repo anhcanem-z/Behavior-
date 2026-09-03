@@ -1505,6 +1505,15 @@ def cmd_analyze(args):
     print("  Call-graph top %d (từ entry):" % len(report["call_graph_top"]))
     for c in report["call_graph_top"][:10]:
         print("    - %s (%d lần)" % (c["class"], c["lần"]))
+    gates = report.get("security_gates", [])
+    if gates:
+        print("  🛡️ Security Gates phát hiện (Zero-Workkey): %d cổng logic" % len(gates))
+        for g in gates[:8]:
+            print("    - [%.0f%%] %s -> %s" % (g["confidence"], g["class"], g["method"]))
+            print("      Taint Source: %s" % g["taint_source"])
+            print("      Decision:     %s -> Gợi ý: %s" % (g["decision_branch"], g["suggested_patch"]["type"]))
+    else:
+        print("  Security Gates (Zero-Workkey): không phát hiện cổng nhạy cảm trực tiếp")
     print("  %s" % report["gợi_ý_điểm_chèn"])
     if args.o:
         with open(args.o, "w", encoding="utf-8", newline="\n") as fh:
@@ -2792,8 +2801,112 @@ def cmd_clean(args):
     return 0
 
 
+COMMAND_GROUPS = [
+    ("1. TIẾP NHẬN & CHẨN ĐOÁN HỆ THỐNG", [
+        ("intake", "Tiếp nhận APK/APKS/XAPK/AAB và trích xuất bằng chứng (Zero-Extraction)"),
+        ("capabilities", "Ghi nhận và kiểm tra năng lực công cụ môi trường (tool_capabilities)"),
+        ("signature-cert", "Trích DER cert gốc và SHA-256 từ APK gốc"),
+        ("selfcheck", "Tự kiểm tra toàn diện module lõi và kho patch"),
+    ]),
+    ("2. PHÂN TÍCH NGỮ NGHĨA SÂU & TAINT FLOW (ZERO-WORKKEY)", [
+        ("analyze", "Phân tích ngữ nghĩa cây APK, quét Packer & Security Gates không cần workkey"),
+        ("model", "Tạo mô hình trung gian app_model (V1/V2) đồ thị gọi hàm & điểm quyết định"),
+        ("semantic-plan", "Đánh giá kế hoạch ngữ nghĩa theo mục tiêu và điều kiện logic"),
+        ("plan-compile", "Tạo transaction nháp từ semantic-plan V2"),
+        ("plan-preflight", "Đánh giá lại draft transaction trước khi áp vào APK"),
+        ("behavior", "Phân tích hành vi APK dựa trên bằng chứng và sự kiện"),
+        ("targets", "Xác định mục tiêu cần xem xét sửa đổi trong mã nguồn"),
+    ]),
+    ("3. ĐIỀU PHỐI PIPELINE HỢP NHẤT & TỰ ĐỘNG HÓA", [
+        ("pipeline", "Khởi chạy Pipeline Thống Nhất đa tầng (auto|intake|semantic|fast|native|combo)"),
+        ("behavior-pipeline", "Chạy luồng khép kín: detector -> cfg -> target -> hook -> frida"),
+        ("gadget-pipeline", "Nhúng Frida Gadget offline vào APK/cây APK (không cần Root)"),
+        ("smart-combo", "Tự động sinh combo tối ưu từ Active Learning (AST Smali + combos_success)"),
+    ]),
+    ("4. CAN THIỆP NHỊ PHÂN SIÊU TỐC IN-PLACE (<0.5S)", [
+        ("fast-patch", "Quy trình 1-Click vá DEX/AXML/ARSC in-place và repack APK siêu tốc"),
+        ("dex-patch", "Patch chuỗi và opcode bytecode DEX trực tiếp, không qua apktool"),
+        ("axml-patch", "Patch nhị phân AndroidManifest.xml (vượt NSC/pinning, đổi quyền)"),
+        ("arsc-patch", "Phân tích và thay thế chuỗi trong bảng tài nguyên resources.arsc"),
+        ("apk-repack-fast", "Repack APK nhanh chỉ với entry thay đổi, giữ nguyên nén"),
+        ("macro-list", "Liệt kê Smali macro an toàn và yêu cầu register"),
+    ]),
+    ("5. NATIVE LAYER & FRIDA MEMORY HOOK", [
+        ("native-sig-bypass", "Tự động quét và bypass SHA-256 cert hash trong thư viện native .so"),
+        ("start-scan", "Quét TOÀN BỘ lib .so trong APK/thư mục/file — báo cáo tổng hợp"),
+        ("rodata-find", "Tìm RVA của chuỗi trong .rodata/.data của file .so"),
+        ("rodata-apply", "Chèn chuỗi TRỰC TIẾP vào file .so (patch nhị phân, không cần Frida)"),
+        ("rodata-patch", "Sinh script Frida patch chuỗi trong .rodata trên RAM"),
+        ("smart-scan", "Quét chuỗi .rodata/.data thông minh với điểm tin cậy Confidence Score"),
+        ("remote-observe", "Quan sát và điều khiển hành vi từ xa qua Frida"),
+        ("remote-patch", "Sinh patch ép flag điều khiển từ xa"),
+        ("remote-map", "Tạo bản đồ flag điều khiển từ xa"),
+    ]),
+    ("6. QUẢN TRỊ BỘ PATCH & KHUNG COMBO", [
+        ("combo", "Tạo các bộ gộp patch (combos) có độ tương thích cao"),
+        ("diff-apk", "Sinh patch từ khác biệt giữa hai APK/cây giải mã"),
+        ("suggest-apk", "Gợi ý chuỗi patch tương thích dựa trên cấu trúc APK thật"),
+        ("suggest-llm", "Gợi ý patch theo ý định người dùng"),
+        ("roadmap", "Sinh roadmap lộ trình thực thi chuỗi patch"),
+        ("simulate", "Mô phỏng áp patch lên cây APK không làm thay đổi tệp gốc"),
+        ("smart-patch", "Bản patch thông minh smali chống R8/D8 và obfuscation"),
+        ("pairip-bypass", "Vô hiệu hóa PairIP (license check) trên cây APK"),
+    ]),
+    ("7. KIỂM ĐỊNH CHẤT LƯỢNG & GIAO DIỆN ĐIỀU KHIỂN", [
+        ("scan", "Quét thư mục patch và in tóm tắt"),
+        ("index", "Tạo patchx_index.json + report.md"),
+        ("dupes", "Phát hiện và phân nhóm patch trùng nội dung"),
+        ("manifest", "Tạo MANIFEST.json cho toàn bộ cây thư mục"),
+        ("verify-manifest", "Xác minh kho theo MANIFEST.json"),
+        ("audit", "Kiểm tra kiến trúc và chuẩn mực từng patch"),
+        ("upgrade", "Nâng cấp patch an toàn sang chuẩn v3"),
+        ("optimize", "Gộp và tối ưu hóa thứ tự các khối lệnh patch"),
+        ("apply", "Áp patch lên cây APK thực tế"),
+        ("ci", "Dây chuyền kiểm định CI tự động"),
+        ("golden", "Cổng thẩm định Golden Gate Build"),
+        ("validate", "Xác thực cây APK (smali, XML, DEX)"),
+        ("apk-prepare", "Giải mã APK bằng apktool tiêu chuẩn"),
+        ("test", "Chạy bộ kiểm tra nội bộ"),
+        ("dex-budget", "Ước lượng giới hạn số lượng tham chiếu DEX (DEX refs)"),
+        ("preflight", "Kiểm tra tiền khả thi trước khi áp patch"),
+        ("fuzz", "Tấn công fuzz/chaos parser & engine"),
+        ("failure", "Cơ sở dữ liệu Failure Intelligence ghi nhận lỗi"),
+        ("baseline", "Chụp và so sánh baseline performance/metrics"),
+        ("coverage", "Đo độ bao phủ của patch trên mã nguồn"),
+        ("suggest", "Tự đề xuất cải tiến cho patch"),
+        ("acceptance", "Chạy tiêu chí nghiệm thu V2"),
+        ("knowledge", "Quản lý kho tri thức nghiệm thu"),
+        ("menu", "Bảng điều khiển tương tác chọn pipeline có phân nhóm"),
+        ("ui", "Giao diện dòng lệnh TUI trực quan"),
+        ("stats", "Thống kê tổng quan kho patch"),
+        ("clean", "Dọn dẹp tệp và thư mục tạm"),
+    ]),
+]
+
+
+class GroupedArgumentParser(argparse.ArgumentParser):
+    """Trình hiển thị trợ giúp phân nhóm pipeline & lệnh cho PatchX."""
+
+    def format_help(self):
+        lines = [
+            f"Sử dụng: patchx [--version] [-h] LỆNH ...",
+            "",
+            "Bộ công cụ phân tích, vá lỗi và tự sinh pipeline tối ưu cho Android APK.",
+            "",
+            "DANH MỤC LỆNH & PIPELINE PHÂN THEO NHÓM CHỨC NĂNG (GỘP CHUỖI TỐI ƯU):",
+            "=" * 76,
+        ]
+        for g_name, cmds in COMMAND_GROUPS:
+            lines.append(f"\n📁 [{g_name}]")
+            for c_name, c_help in cmds:
+                lines.append(f"  {c_name:<20} {c_help}")
+        lines.append("\n" + "=" * 76)
+        lines.append("Gõ 'patchx LỆNH -h' để xem hướng dẫn chi tiết của từng lệnh.\n")
+        return "\n".join(lines)
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(
+    parser = GroupedArgumentParser(
         prog="patchx",
         description="Bộ script nâng cấp cho bộ sưu tập patch APK Editor.")
     parser.add_argument("--version", action="version", version="patchx %s" % __version__)
@@ -2825,9 +2938,9 @@ def main(argv=None):
     p.add_argument("-o", "--output-dir", default=None, help="Thư mục output (mặc định: outputs/intake)")
     p.set_defaults(func=cmd_capabilities)
 
-    p = sub.add_parser("pipeline", help="Khởi chạy Pipeline Thống Nhất (auto|intake|fast|behavior|native|combo)")
+    p = sub.add_parser("pipeline", help="Khởi chạy Pipeline Thống Nhất (auto|intake|semantic|fast|behavior|native|combo)")
     p.add_argument("artifact", help="Tệp APK, APKS, XAPK hoặc AAB")
-    p.add_argument("--mode", default="auto", choices=["auto", "intake", "fast", "behavior", "native", "combo"], help="Chế độ pipeline")
+    p.add_argument("--mode", default="auto", choices=["auto", "intake", "semantic", "fast", "behavior", "native", "combo"], help="Chế độ pipeline")
     p.add_argument("-o", "--out", default=None, help="Đường dẫn APK đầu ra (nếu có)")
     p.add_argument("--output-dir", default=None, help="Thư mục xuất báo cáo (mặc định: outputs/pipeline)")
     p.add_argument("--dex-str", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi DEX in-place")

@@ -60,6 +60,8 @@ class UnifiedPipeline:
         try:
             if mode == "intake":
                 self._run_intake_stage(report, **kwargs)
+            elif mode == "semantic":
+                self._run_semantic_stage(report, **kwargs)
             elif mode == "fast":
                 self._run_fast_stage(report, **kwargs)
             elif mode == "behavior":
@@ -71,7 +73,7 @@ class UnifiedPipeline:
             elif mode == "auto":
                 self._run_auto_hybrid_stage(report, **kwargs)
             else:
-                raise ValueError(f"Chế độ pipeline không hợp lệ: '{mode}'. Chọn: intake, fast, behavior, native, combo, auto.")
+                raise ValueError(f"Chế độ pipeline không hợp lệ: '{mode}'. Chọn: auto, intake, semantic, fast, behavior, native, combo.")
 
             # Tính verdict tổng quát
             failed_stages = [s["name"] for s in report["stages"] if s.get("status") == "FAIL"]
@@ -228,9 +230,41 @@ class UnifiedPipeline:
             "details": combo_res,
         })
 
+    def _run_semantic_stage(self, report: Dict[str, Any], **kwargs) -> None:
+        """Stage: Deep Semantic & Taint Analysis (Zero-Workkey Discovery)."""
+        from patchx_core.smali_sem import detect_security_gates
+        tree_dir = self.artifact
+        if os.path.isfile(self.artifact):
+            apk_name = os.path.splitext(os.path.basename(self.artifact))[0]
+            candidate_tree = os.path.join(
+                os.path.dirname(self.output_dir), "apk", "apk-trees", f"{apk_name}_src"
+            )
+            if os.path.isdir(candidate_tree):
+                tree_dir = candidate_tree
+            else:
+                report["stages"].append({
+                    "name": "semantic_discovery",
+                    "status": "SKIP",
+                    "reason": f"Cần cây giải mã smali để quét taint flow. Đặt cây tại: {candidate_tree}",
+                })
+                return
+
+        gates = detect_security_gates(tree_dir, max_gates=kwargs.get("max_gates", 20))
+        report["stages"].append({
+            "name": "semantic_discovery",
+            "status": "PASS" if gates else "WARN",
+            "security_gates_count": len(gates),
+            "top_gates": gates[:5],
+            "zero_workkey": True,
+        })
+        out_gates_file = os.path.join(self.output_dir, "semantic_gates.json")
+        with open(out_gates_file, "w", encoding="utf-8") as fh:
+            json.dump({"tree": tree_dir, "gates": gates}, fh, ensure_ascii=False, indent=2)
+        report["outputs"]["semantic_gates_json"] = out_gates_file
+
     def _run_auto_hybrid_stage(self, report: Dict[str, Any], **kwargs) -> None:
-        """Stage 6: Intelligent Auto-Hybrid Flow."""
-        # 1. Intake
+        """Intelligent Auto-Hybrid Flow: Tự động tổng hợp và thực thi chuỗi tối ưu theo APK."""
+        # 1. Tiếp nhận và phân tích cấu trúc (Intake)
         self._run_intake_stage(report, **kwargs)
         intake_stage = next((s for s in report["stages"] if s["name"] == "intake_triage"), None)
         has_native = False
@@ -238,17 +272,23 @@ class UnifiedPipeline:
             abis = intake_stage["structure"].get("abis", [])
             has_native = len(abis) > 0
 
-        # 2. Fast-Path In-Place Patching (Zero-Copy)
+        # 2. Truy vết ngữ nghĩa sâu & Security Gates (Zero-Workkey)
+        self._run_semantic_stage(report, **kwargs)
+
+        # 3. Can thiệp Fast-Path In-Place (DEX/AXML/ARSC)
         self._run_fast_stage(report, **kwargs)
 
-        # 3. Nếu có thư viện Native, tự động chạy Native Signature Spoof
+        # 4. Nếu có thư viện Native, tự động chạy Native Signature Spoof
         if has_native and report["outputs"].get("patched_apk"):
             kwargs["target_apk"] = report["outputs"]["patched_apk"]
             kwargs["orig_apk"] = self.artifact
             self._run_native_stage(report, **kwargs)
 
-        # 4. Gợi ý Behavior / Frida
+        # 5. Phân tích hành vi & Hook Frida
         self._run_behavior_stage(report, **kwargs)
+
+        # 6. Active Learning Smart Combo
+        self._run_combo_stage(report, **kwargs)
 
     def _write_reports(self, report: Dict[str, Any]) -> None:
         """Ghi báo cáo JSON và Markdown chuẩn hóa."""

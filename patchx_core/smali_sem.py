@@ -247,7 +247,7 @@ INVOKE_RE = re.compile(
 INVOKE_FULL_RE = re.compile(
     r"\binvoke-[^\s]+\s*\{(?P<registers>[^}]*)\},\s*"
     r"(?P<target>L[^;]+;->[^\s(]+\([^)]*\)[^\s]+)")
-_CLASS_RE = re.compile(r"^\.class\s+.+?\s+(L[^;]+;)", re.M)
+_CLASS_RE = re.compile(r"^\.class\s+(?:.+?\s+)?(L[^;]+;)", re.M)
 _FIELD_READ_RE = re.compile(r"\b(?:sget|iget)(?:-[\w/]+)?\s+[^,]+(?:,\s*[^,]+)?,\s*(L[^;]+;->[^\s]+)")
 _FIELD_WRITE_RE = re.compile(r"\b(?:sput|iput)(?:-[\w/]+)?\s+[^,]+(?:,\s*[^,]+)?,\s*(L[^;]+;->[^\s]+)")
 _STRING_RE = re.compile(r'\bconst-string(?:/jumbo)?\s+[^,]+,\s+"((?:\\.|[^"\\])*)"')
@@ -613,21 +613,166 @@ def method_coverage_for_file(smali_text, pattern, is_regex):
 
 
 def build_semantic_report(tree, top=15):
-    """Bao cao ngu nghia tổng hop cho mot cây APK da giai ma."""
+    """Bao cao ngu nghia tổng hop cho mot cây APK da giai ma (kem Security Gates khong can workkey)."""
     app, launchers = entry_classes(tree)
     entries = [e for e in [app] + launchers if e]
     graph = call_graph_rank(tree, entries, depth=3, top=top)
     packers = detect_packers(tree)
     enc = detect_string_encryption(tree)
+    gates = detect_security_gates(tree, max_gates=top)
     return {
         "application": app,
         "launchers": launchers,
         "call_graph_top": graph,
         "packers": packers,
         "string_encryption_suspects": enc,
+        "security_gates": gates,
         "gợi_ý_điểm_chèn": (
             "Co packer — patch can chen trước khi pack (vd INIT/HOOK_SCRIPT "
             "vao Application#attachBaseContext) hoac dung hook tang thap." if
             packers else "Khong phat hien packer — chen smali thong thuong "
             "ap dung duoc."),
     }
+
+
+SENSITIVE_API_PATTERNS = [
+    (re.compile(r"->(?:getPackageInfo|signatures|signingInfo|getInstallerPackageName|getSignature)"), "signature_integrity", 40),
+    (re.compile(r"Ljava/lang/reflect/Method;->invoke"), "reflection_dynamic", 35),
+    (re.compile(r"->(?:getSharedPreferences|getBoolean|getString|getInt)\b"), "preferences_state", 30),
+    (re.compile(r"->(?:checkSelfPermission|checkCallingOrSelfPermission)\b"), "permission_gate", 35),
+    (re.compile(r"->(?:isBillingSupported|queryPurchases|getPurchaseState|getResponseCode)\b"), "billing_license", 45),
+    (re.compile(r"->(?:getActiveNetworkInfo|getNetworkCapabilities|isConnected)\b"), "network_connectivity", 25),
+    (re.compile(r"Ljava/io/File;->(?:exists|canExecute)\b"), "root_file_tamper", 35),
+    (re.compile(r"Ljava/lang/Runtime;->exec\b"), "shell_execution", 35),
+]
+
+THIRD_PARTY_PREFIXES = (
+    "Landroid/", "Landroidx/", "Lcom/google/", "Lkotlin/", "Lkotlinx/",
+    "Lokhttp3/", "Lokio/", "Lcom/facebook/", "Lio/reactivex/", "Lorg/apache/",
+    "Lcom/android/", "Lorg/chromium/", "Lcom/tencent/mmkv/"
+)
+
+
+def _invert_branch(branch_inst):
+    """Dao nguoc lenh re nhanh smali."""
+    inversions = {
+        "if-eqz": "if-nez",
+        "if-nez": "if-eqz",
+        "if-eq": "if-ne",
+        "if-ne": "if-eq",
+        "if-ltz": "if-gez",
+        "if-gez": "if-ltz",
+        "if-gtz": "if-lez",
+        "if-lez": "if-gtz",
+    }
+    for orig, inv in inversions.items():
+        if branch_inst.startswith(orig):
+            return branch_inst.replace(orig, inv, 1)
+    return branch_inst
+
+
+def detect_security_gates(tree, max_gates=25):
+    """Truy vet Taint Flow & Security Gates trong smali khong can tu khoa (Zero-Workkey).
+    
+    Quet cac method thuc te (da loc bo thu vien ben thu 3 nhu AndroidX/Google),
+    lan theo chuoi thanh ghi (Def-Use Chain) tu loi goi API nhay cam den cac lenh
+    re nhanh if-* hoac return boolean.
+    """
+    gates = []
+    roots = _smali_roots(tree)
+    if not roots:
+        return []
+
+    for root in roots:
+        for base, _dirs, files in os.walk(root):
+            for fname in sorted(files):
+                if not fname.endswith(".smali"):
+                    continue
+                path = os.path.join(base, fname)
+                try:
+                    text = open(path, encoding="utf-8", errors="replace").read()
+                except OSError:
+                    continue
+                cm = _CLASS_RE.search(text)
+                cls = cm.group(1) if cm else ""
+                if not cls:
+                    cand_rel = os.path.relpath(path, root)
+                    if cand_rel.endswith(".smali"):
+                        cls = "L" + cand_rel[:-6].replace(os.sep, "/") + ";"
+                if cls.startswith(THIRD_PARTY_PREFIXES):
+                    continue  # Cat tia thu vien ben thu 3
+
+                rel = os.path.relpath(path, tree)
+                for meth in extract_methods(text):
+                    params, ret = _method_types(meth["signature"])
+                    lines = [l.strip() for l in meth["body"].splitlines() if l.strip()]
+                    n_lines = len(lines)
+                    for idx, line in enumerate(lines):
+                        for pat, cat, base_score in SENSITIVE_API_PATTERNS:
+                            if pat.search(line):
+                                reg = None
+                                if idx + 1 < n_lines:
+                                    m_res = re.match(r"^move-result(?:-object|-boolean)?\s+([vp]\d+)", lines[idx + 1])
+                                    if m_res:
+                                        reg = m_res.group(1)
+                                
+                                if not reg:
+                                    continue
+
+                                for fwd_idx in range(idx + 2, min(idx + 22, n_lines)):
+                                    fwd_line = lines[fwd_idx]
+                                    branch_m = re.match(r"^(if-[a-z]+(?:z)?)\s+([vp]\d+)(?:,\s*([vp]\d+))?,\s*(:\S+)", fwd_line)
+                                    if branch_m and reg in (branch_m.group(2), branch_m.group(3)):
+                                        score = base_score + 35
+                                        if ret == "Z":
+                                            score += 15
+                                        gates.append({
+                                            "class": cls,
+                                            "method": meth["name"],
+                                            "signature": meth["signature"],
+                                            "file": rel,
+                                            "line": meth["line"] + fwd_idx,
+                                            "return_type": ret,
+                                            "category": cat,
+                                            "taint_source": line,
+                                            "taint_register": reg,
+                                            "decision_branch": fwd_line,
+                                            "confidence": min(100.0, float(score)),
+                                            "suggested_patch": {
+                                                "type": "RETURN_CONSTANT" if ret == "Z" else "INVERT_BRANCH",
+                                                "value": "0x1" if ret == "Z" else None,
+                                                "target_branch": fwd_line,
+                                                "inverted_branch": _invert_branch(fwd_line),
+                                            },
+                                            "zero_workkey": True,
+                                        })
+                                        break
+
+                                    if fwd_line.startswith("return") and reg in fwd_line:
+                                        score = base_score + 30
+                                        if ret == "Z":
+                                            score += 20
+                                        gates.append({
+                                            "class": cls,
+                                            "method": meth["name"],
+                                            "signature": meth["signature"],
+                                            "file": rel,
+                                            "line": meth["line"] + fwd_idx,
+                                            "return_type": ret,
+                                            "category": cat,
+                                            "taint_source": line,
+                                            "taint_register": reg,
+                                            "decision_branch": fwd_line,
+                                            "confidence": min(100.0, float(score)),
+                                            "suggested_patch": {
+                                                "type": "RETURN_CONSTANT",
+                                                "value": "0x1" if ret == "Z" else "0x0",
+                                                "target_instruction": fwd_line,
+                                            },
+                                            "zero_workkey": True,
+                                        })
+                                        break
+
+    gates.sort(key=lambda x: -x["confidence"])
+    return gates[:max_gates]
+
