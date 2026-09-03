@@ -191,7 +191,20 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
     1. **Bắt gói tin tại tầng ứng dụng (Application-Layer Hooking)**: Thay vì giải mã TLS phức tạp ở tầng mạng, can thiệp trực tiếp vào phương thức `Interceptor.intercept` của OkHttp hoặc `getInputStream` của HttpURLConnection để đọc/ghi dữ liệu JSON trước khi mã hóa và sau khi nhận phản hồi từ server.
     2. **Gỡ ghim chứng chỉ nhị phân (AXML Network Security Config Bypass)**: Sửa trực tiếp `AndroidManifest.xml` nhị phân thông qua `patchx axml-patch --bypass-nsc` để ép ứng dụng tin tưởng chứng chỉ người dùng (User CA) trên Android 7.0+, cho phép chuyển tiếp lưu lượng qua proxy phân tích cục bộ mà không cần can thiệp hệ thống.
     3. **Phát hiện lỗ hổng tin tưởng client (Zero-Trust Flaws)**: Phân tích các endpoint máy chủ tin tưởng mù quáng các tham số do client gửi lên (như cờ trạng thái, User ID, Client Timestamp) để tái lập cấu hình API hợp lệ.
-*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Đã có công cụ hỗ trợ trực tiếp trong toolkit: `axml-patch --bypass-nsc`, `behavior-pipeline` và `rodata-patch`.
+#### 🔹 Kinh Nghiệm 13: Local SharedPreferences & Datastore Resilience Mocking (Mô Phỏng Cấu Hình Cục Bộ & Ngoại Tuyến)
+*   **Vấn đề thực tế**: Các ứng dụng Android lưu cấu hình trạng thái, cờ tính năng (Feature Flags) và bộ đệm quyền hạn trong `SharedPreferences` hoặc `androidx.datastore`. Khi mất mạng hoặc máy chủ không phản hồi, ứng dụng đọc cấu hình từ bộ nhớ cục bộ.
+*   **Cơ chế chọn lọc**:
+    - Can thiệp các phương thức đọc cấu hình: `SharedPreferences.getBoolean(key, defValue)`, `getString(key, defValue)`.
+    - Khi truy vấn các key liên quan đến `vip`, `pro`, `premium`, `trial_active`, tự động trả về `true` hoặc cấu hình nâng cao.
+    - Cung cấp lớp trợ giúp `LocalConfigHelper` để quản lý các giá trị mặc định mà không làm thay đổi các thiết lập cá nhân khác của người dùng.
+*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Có thể xây dựng thành bản vá chuẩn hóa độc lập.
+
+#### 🔹 Kinh Nghiệm 14: Certificate Transparency & SSL Diagnostic Resilience (Đồng Bộ Chứng Chỉ An Toàn Mạng)
+*   **Vấn đề thực tế**: Khi kiểm thử ứng dụng trong môi trường thử nghiệm nội bộ hoặc proxy chẩn đoán lỗi, cơ chế ghim chứng chỉ SSL (SSL Pinning / TrustKit) khiến ứng dụng ngắt kết nối mạng hoàn toàn.
+*   **Cơ chế chọn lọc**:
+    - Thay thế `X509TrustManager` mặc định bằng implementation tin tưởng chứng chỉ kiểm thử (`trust_manager_template` trong `macro_registry.py`).
+    - Cấu hình `NetworkSecurityConfig` cho phép `user-certificates` giúp lưu lượng mạng có thể được kiểm toán an toàn trong sandbox.
+*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Tương thích hoàn toàn với các macro có sẵn trong toolkit.
 
 ---
 
@@ -216,6 +229,8 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
 
 ## 5. NHẬT KÝ HỌC HỎI & CẬP NHẬT KINH NGHIỆM (AUDIT LOG)
 
+*   **2026-09-03 (Phiên mở rộng cấu hình cục bộ & đồng bộ chứng chỉ an toàn)**:
+    - Bổ sung Kinh nghiệm 13 (Mô phỏng SharedPreferences / Datastore cục bộ đảm bảo ứng dụng hoạt động mượt mà ngoại tuyến) và Kinh nghiệm 14 (Cấu hình chứng chỉ tin cậy phục vụ kiểm toán an toàn trong sandbox).
 *   **2026-09-03 (Phiên phân tích ranh giới niềm tin Client-Server & Bắt gói tin giải mã)**:
     - Bổ sung Kinh nghiệm 12 về ranh giới niềm tin Client-Server, cơ chế gỡ ghim chứng chỉ nhị phân AXML (`--bypass-nsc`), trích xuất dữ liệu tại tầng Interceptor ứng dụng và kiến trúc phòng thủ Zero Trust backend.
 *   **2026-09-03 (Phiên nâng cao — Đánh lừa Server cấp quyền thật)**:

@@ -115,7 +115,9 @@ class UnifiedPipeline:
         )
         dex_str = kwargs.get("dex_str_replaces") or {}
         dex_hex = kwargs.get("dex_hex_replaces") or {}
-        axml_str = kwargs.get("axml_replaces") or {}
+        axml_str = dict(kwargs.get("axml_replaces") or {})
+        if kwargs.get("bypass_nsc", True):
+            axml_str.setdefault("networkSecurityConfig", "disabledSecConfig")
         arsc_str = kwargs.get("arsc_replaces") or {}
 
         dex_replacements = [(k, v, False) for k, v in dex_str.items()] + [(k, v, True) for k, v in dex_hex.items()]

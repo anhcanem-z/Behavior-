@@ -50,6 +50,28 @@ MACROS = {
         "    return-object v0\n"
         ".end method"
     ),
+    "revenuecat_is_active": (
+        "const/4 v0, 0x1\n"
+        "return v0"
+    ),
+    "admob_reward_instant_callback": (
+        "if-eqz p1, :cond_reward_end\n"
+        "const/4 v0, 0x0\n"
+        "invoke-interface {p1, v0}, Lcom/google/android/gms/ads/OnUserEarnedRewardListener;->onUserEarnedReward(Lcom/google/android/gms/ads/rewarded/RewardItem;)V\n"
+        ":cond_reward_end\n"
+        "return-void"
+    ),
+    "device_id_randomizer": (
+        "invoke-static {}, Ljava/util/UUID;->randomUUID()Ljava/util/UUID;\n"
+        "move-result-object v0\n"
+        "invoke-virtual {v0}, Ljava/util/UUID;->toString()Ljava/lang/String;\n"
+        "move-result-object v0\n"
+        "return-object v0"
+    ),
+    "remote_config_force_true": (
+        "const/4 v0, 0x1\n"
+        "return v0"
+    ),
 }
 
 

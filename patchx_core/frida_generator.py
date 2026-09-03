@@ -58,6 +58,69 @@ class FridaScriptGenerator:
             "        console.log('[+] Generic SSL Pinning Bypassed');\n"
             "    } catch (err) { console.log('[-] SSL Bypass Notice: ' + err); }\n"
         )
+        okhttp_interceptor = (
+            "    // --- KN 1: Dynamic OkHttp Interceptor Injection ---\n"
+            "    try {\n"
+            "        var Interceptor = Java.use('okhttp3.Interceptor');\n"
+            "        var ResponseBody = Java.use('okhttp3.ResponseBody');\n"
+            "        var OkHttpInterceptor = Java.registerClass({\n"
+            "            name: 'com.patchx.runtime.NetworkInterceptor',\n"
+            "            implements: [Interceptor],\n"
+            "            methods: {\n"
+            "                intercept: function (chain) {\n"
+            "                    var request = chain.request();\n"
+            "                    var newReq = request.newBuilder()\n"
+            "                        .header('X-App-Env', 'staging')\n"
+            "                        .header('X-Client-Group', 'beta_pro')\n"
+            "                        .build();\n"
+            "                    var response = chain.proceed(newReq);\n"
+            "                    var body = response.body();\n"
+            "                    var mediaType = body ? body.contentType() : null;\n"
+            "                    if (mediaType && mediaType.toString().indexOf('application/json') !== -1) {\n"
+            "                        var source = body.source();\n"
+            "                        source.request(1048576);\n"
+            "                        var json = source.buffer().clone().readUtf8();\n"
+            "                        var modified = json.replace(/\"(is_vip|is_premium|is_subscribed|has_active_entitlement)\":\\s*false/g, '\"$1\":true');\n"
+            "                        return response.newBuilder().body(ResponseBody.create(mediaType, modified)).build();\n"
+            "                    }\n"
+            "                    return response;\n"
+            "                }\n"
+            "            }\n"
+            "        });\n"
+            "        Java.use('okhttp3.OkHttpClient$Builder').build.implementation = function () {\n"
+            "            this.addInterceptor(OkHttpInterceptor.$new());\n"
+            "            return this.build();\n"
+            "        };\n"
+            "        console.log('[+] OkHttp Network Interceptor Injected');\n"
+            "    } catch (err) { console.log('[-] OkHttp Interceptor Notice: ' + err); }\n"
+        )
+
+        device_spoof = (
+            "    // --- KN 7: Device Identity Rotation (Android ID) ---\n"
+            "    try {\n"
+            "        var SettingsSecure = Java.use('android.provider.Settings$Secure');\n"
+            "        SettingsSecure.getString.overload('android.content.ContentResolver', 'java.lang.String').implementation = function (resolver, name) {\n"
+            "            if (name === 'android_id') {\n"
+            "                return '35' + Math.floor(10000000000000 + Math.random() * 90000000000000);\n"
+            "            }\n"
+            "            return this.getString(resolver, name);\n"
+            "        };\n"
+            "        console.log('[+] Device ID Rotator Hooked');\n"
+            "    } catch (err) { console.log('[-] Device ID Rotator Notice: ' + err); }\n"
+        )
+
+        rasp_bypass = (
+            "    // --- KN 6: RASP Anti-Debug & ptrace Bypass ---\n"
+            "    try {\n"
+            "        var ptrace = Module.findExportByName(null, 'ptrace');\n"
+            "        if (ptrace) {\n"
+            "            Interceptor.attach(ptrace, {\n"
+            "                onLeave: function (retval) { retval.replace(0); }\n"
+            "            });\n"
+            "            console.log('[+] RASP ptrace & Anti-Debug Bypassed');\n"
+            "        }\n"
+            "    } catch (err) { console.log('[-] RASP Bypass Notice: ' + err); }\n"
+        )
 
         for target in targets:
             if hasattr(target, "to_frida_hook_config"):
@@ -118,7 +181,7 @@ rpc.exports = {
 """
 
         footer = "\n});\n"
-        full_script = f"{header}\n{crypto_code}\n{ssl_generic_bypass}\n{body}{footer}\n{rpc_exports}"
+        full_script = f"{header}\n{crypto_code}\n{ssl_generic_bypass}\n{okhttp_interceptor}\n{device_spoof}\n{rasp_bypass}\n{body}{footer}\n{rpc_exports}"
 
         if output_file:
             Path(output_file).write_text(full_script, encoding="utf-8")
