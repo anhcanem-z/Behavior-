@@ -264,6 +264,16 @@ class UnifiedPipeline:
             json.dump({"tree": tree_dir, "gates": gates}, fh, ensure_ascii=False, indent=2)
         report["outputs"]["semantic_gates_json"] = out_gates_file
 
+        if kwargs.get("auto_patch", False):
+            from .auto_gate_patcher import apply_security_gates
+            p_res = apply_security_gates(tree_dir, gates=gates, min_confidence=kwargs.get("min_confidence", 75.0))
+            report["stages"].append({
+                "name": "auto_gate_patcher",
+                "status": "PASS" if p_res["applied_count"] > 0 else "SKIP",
+                "applied_count": p_res["applied_count"],
+                "applied": p_res["applied"],
+            })
+
     def _run_auto_hybrid_stage(self, report: Dict[str, Any], **kwargs) -> None:
         """Intelligent Auto-Hybrid Flow: Tự động tổng hợp và thực thi chuỗi tối ưu theo APK."""
         # 1. Tiếp nhận và phân tích cấu trúc (Intake)
@@ -274,8 +284,8 @@ class UnifiedPipeline:
             abis = intake_stage["structure"].get("abis", [])
             has_native = len(abis) > 0
 
-        # 2. Truy vết ngữ nghĩa sâu & Security Gates (Zero-Workkey)
-        self._run_semantic_stage(report, **kwargs)
+        # 2. Truy vết ngữ nghĩa sâu & Security Gates (Zero-Workkey) & Tự vá cổng logic
+        self._run_semantic_stage(report, auto_patch=True, **kwargs)
 
         # 3. Can thiệp Fast-Path In-Place (DEX/AXML/ARSC)
         self._run_fast_stage(report, **kwargs)
