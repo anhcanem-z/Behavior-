@@ -29,6 +29,24 @@ from .behavior.target import TargetAnalyzer
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+class C:
+    """Bảng mã màu ANSI trực quan cho giao diện dòng lệnh."""
+    RST = "\033[0m"
+    BLD = "\033[1m"
+    DIM = "\033[2m"
+    RED = "\033[91m"
+    GRN = "\033[92m"
+    YEL = "\033[93m"
+    BLU = "\033[94m"
+    MAG = "\033[95m"
+    CYN = "\033[96m"
+    WHT = "\033[97m"
+    BG_BLU = "\033[44;97m"
+    BG_MAG = "\033[45;97m"
+    BG_RED = "\033[41;97m"
+    BG_GRN = "\033[42;30m"
+
+
 def _load_patches(root, recursive=False):
     """Nạp mọi patch (zip) trong thư mục; xử lý zip lồng nhau."""
     patches = []
@@ -1486,39 +1504,55 @@ def cmd_suggest(args):
 def cmd_analyze(args):
     from .smali_sem import build_semantic_report
     report = build_semantic_report(args.cay_apk, top=args.top)
-    print("[patchx] Phân tích ngữ nghĩa: %s" % args.cay_apk)
-    print("  Application: %s" % (report["application"] or "(không khai báo)"))
+    w = 78
+    print(f"\n{C.BLD}{C.CYN}╔{'═' * (w - 2)}╗{C.RST}")
+    print(f"{C.BLD}{C.CYN}║{C.RST} {C.BLD}{C.WHT}KẾT QUẢ PHÂN TÍCH NGỮ NGHĨA SÂU (SEMANTIC & TAINT FLOW){C.RST}{' ' * (w - 58)}{C.BLD}{C.CYN}║{C.RST}")
+    print(f"{C.BLD}{C.CYN}╚{'═' * (w - 2)}╝{C.RST}")
+    print(f"{C.BLD}Mục tiêu:{C.RST} {C.CYN}{args.cay_apk}{C.RST}")
+    print(f"  {C.BLD}Application:{C.RST} {report['application'] or (C.DIM + '(không khai báo)' + C.RST)}")
     if report["launchers"]:
-        print("  Launcher: %s" % ", ".join(report["launchers"]))
+        print(f"  {C.BLD}Launcher:   {C.RST} {C.GRN}{', '.join(report['launchers'])}{C.RST}")
+
+    # 1. Vấn đề Packer / Vỏ bọc (Đỏ nguy hiểm)
     if report["packers"]:
-        print("  ⚠ Packer phát hiện: %d" % len(report["packers"]))
+        print(f"\n  {C.BLD}{C.RED}🚨 PHÁT HIỆN PACKER / BẢO VỆ GỐC ({len(report['packers'])} phát hiện):{C.RST}")
         for pk in report["packers"][:8]:
-            print("    - %s (%s) — %s" % (pk["nghi_ngờ"], pk["tệp"], pk["đường_dẫn"]))
+            print(f"    {C.RED}•{C.RST} {C.BLD}{pk['nghi_ngờ']}{C.RST} ({pk['tệp']}) — {C.DIM}{pk['đường_dẫn']}{C.RST}")
     else:
-        print("  Packer: không phát hiện")
+        print(f"  {C.BLD}Packer:     {C.RST} {C.GRN}✅ Không phát hiện (mã nguồn mở/không đóng gói){C.RST}")
+
+    # 2. Vấn đề Mã hóa chuỗi / R8 Obfuscation (Vàng cảnh báo)
     if report["string_encryption_suspects"]:
-        print("  ⚠ Nghi mã hóa chuỗi: %d tệp" % len(report["string_encryption_suspects"]))
-        for s in report["string_encryption_suspects"][:8]:
-            print("    - %s (điểm %d)" % (s["tệp"], s["điểm"]))
+        print(f"\n  {C.BLD}{C.YEL}⚠️ PHÁT HIỆN MÃ HÓA CHUỖI / R8 OBFUSCATION ({len(report['string_encryption_suspects'])} tệp nghi ngờ):{C.RST}")
+        for s in report["string_encryption_suspects"][:6]:
+            print(f"    {C.YEL}•{C.RST} {s['tệp']} {C.DIM}(điểm nghi vấn: {s['điểm']}){C.RST}")
     else:
-        print("  Mã hóa chuỗi: không phát hiện")
-    print("  Call-graph top %d (từ entry):" % len(report["call_graph_top"]))
-    for c in report["call_graph_top"][:10]:
-        print("    - %s (%d lần)" % (c["class"], c["lần"]))
+        print(f"  {C.BLD}Mã hóa chuỗi:{C.RST} {C.GRN}✅ Không phát hiện mã hóa chuỗi diện rộng{C.RST}")
+
+    # 3. Đồ thị gọi hàm từ Entry (Xanh dương)
+    print(f"\n  {C.BLD}{C.BLU}🌐 ĐỒ THỊ GỌI HÀM TOP {len(report['call_graph_top'])} (Tính từ Entrypoint):{C.RST}")
+    for c in report["call_graph_top"][:8]:
+        print(f"    {C.BLU}↳{C.RST} {c['class']:<45} {C.DIM}(gọi {c['lần']} lần){C.RST}")
+
+    # 4. Cổng Bảo Vệ Logic (Security Gates — Zero-Workkey) (Magenta & Xanh lá)
     gates = report.get("security_gates", [])
     if gates:
-        print("  🛡️ Security Gates phát hiện (Zero-Workkey): %d cổng logic" % len(gates))
+        print(f"\n  {C.BLD}{C.MAG}🛡️ PHÁT HIỆN CỔNG BẢO VỆ LOGIC (SECURITY GATES — ZERO-WORKKEY): {len(gates)} CỔNG{C.RST}")
         for g in gates[:8]:
-            print("    - [%.0f%%] %s -> %s" % (g["confidence"], g["class"], g["method"]))
-            print("      Taint Source: %s" % g["taint_source"])
-            print("      Decision:     %s -> Gợi ý: %s" % (g["decision_branch"], g["suggested_patch"]["type"]))
+            conf = g["confidence"]
+            conf_badge = f"{C.GRN}[{conf:.0f}% CAO]{C.RST}" if conf >= 80 else (f"{C.YEL}[{conf:.0f}% TB]{C.RST}" if conf >= 65 else f"{C.RED}[{conf:.0f}% THẤP]{C.RST}")
+            print(f"    {C.MAG}◆{C.RST} {conf_badge} {C.BLD}{g['class']}{C.RST} -> {C.CYN}{g['method']}{C.RST}")
+            print(f"      {C.DIM}Taint Source:{C.RST} {C.YEL}{g['taint_source']}{C.RST}")
+            print(f"      {C.DIM}Decision:    {C.RST} {C.RED}{g['decision_branch']}{C.RST} ➔ {C.GRN}{C.BLD}Gợi ý: {g['suggested_patch']['type']}{C.RST}")
     else:
-        print("  Security Gates (Zero-Workkey): không phát hiện cổng nhạy cảm trực tiếp")
-    print("  %s" % report["gợi_ý_điểm_chèn"])
+        print(f"\n  {C.DIM}Security Gates: Không phát hiện cổng logic rẽ nhánh trực tiếp.{C.RST}")
+
+    print(f"\n  {C.BLD}{C.CYN}💡 Đề xuất can thiệp:{C.RST} {report['gợi_ý_điểm_chèn']}")
     if args.o:
         with open(args.o, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(report, fh, ensure_ascii=False, indent=2)
-        print("Đã ghi:", args.o)
+        print(f"  {C.GRN}Đã ghi báo cáo JSON:{C.RST} {args.o}")
+    print()
     return 0
 
 
@@ -2884,24 +2918,40 @@ COMMAND_GROUPS = [
 ]
 
 
+GROUP_COLORS = {
+    "1. TIẾP NHẬN & CHẨN ĐOÁN HỆ THỐNG": (C.CYN, "🔍"),
+    "2. PHÂN TÍCH NGỮ NGHĨA SÂU & TAINT FLOW (ZERO-WORKKEY)": (C.MAG, "🧠"),
+    "3. ĐIỀU PHỐI PIPELINE HỢP NHẤT & TỰ ĐỘNG HÓA": (C.GRN, "⚡"),
+    "4. CAN THIỆP NHỊ PHÂN SIÊU TỐC IN-PLACE (<0.5S)": (C.YEL, "🚀"),
+    "5. NATIVE LAYER & FRIDA MEMORY HOOK": (C.RED, "🛡️"),
+    "6. QUẢN TRỊ BỘ PATCH & KHUNG COMBO": (C.BLU, "📦"),
+    "7. KIỂM ĐỊNH CHẤT LƯỢNG & GIAO DIỆN ĐIỀU KHIỂN": (C.WHT, "🛠️"),
+}
+
+
 class GroupedArgumentParser(argparse.ArgumentParser):
-    """Trình hiển thị trợ giúp phân nhóm pipeline & lệnh cho PatchX."""
+    """Trình hiển thị trợ giúp phân nhóm pipeline & lệnh cho PatchX với màu sắc trực quan."""
 
     def format_help(self):
+        w = 78
         lines = [
-            f"Sử dụng: patchx [--version] [-h] LỆNH ...",
+            f"{C.BLD}{C.CYN}╔{'═' * (w - 2)}╗{C.RST}",
+            f"{C.BLD}{C.CYN}║{C.RST} {C.BLD}{C.WHT}PATCHX — BỘ ĐIỀU PHỐI PIPELINE & PHÂN TÍCH NGỮ NGHĨA APK{C.RST}{' ' * (w - 60)}{C.BLD}{C.CYN}║{C.RST}",
+            f"{C.BLD}{C.CYN}║{C.RST} {C.DIM}Cú pháp: patchx [--version] [-h] LỆNH [tham số...]{C.RST}{' ' * (w - 53)}{C.BLD}{C.CYN}║{C.RST}",
+            f"{C.BLD}{C.CYN}╚{'═' * (w - 2)}╝{C.RST}",
             "",
-            "Bộ công cụ phân tích, vá lỗi và tự sinh pipeline tối ưu cho Android APK.",
-            "",
-            "DANH MỤC LỆNH & PIPELINE PHÂN THEO NHÓM CHỨC NĂNG (GỘP CHUỖI TỐI ƯU):",
-            "=" * 76,
+            f"{C.BLD}DANH MỤC LỆNH & PIPELINE PHÂN THEO NHÓM CHỨC NĂNG (GỘP CHUỖI TỐI ƯU):{C.RST}",
+            f"{C.DIM}{'─' * w}{C.RST}",
         ]
         for g_name, cmds in COMMAND_GROUPS:
-            lines.append(f"\n📁 [{g_name}]")
+            col, icon = GROUP_COLORS.get(g_name, (C.CYN, "📁"))
+            lines.append(f"\n{C.BLD}{col}{icon} [{g_name}]{C.RST}")
             for c_name, c_help in cmds:
-                lines.append(f"  {c_name:<20} {c_help}")
-        lines.append("\n" + "=" * 76)
-        lines.append("Gõ 'patchx LỆNH -h' để xem hướng dẫn chi tiết của từng lệnh.\n")
+                lines.append(f"  {col}•{C.RST} {C.BLD}{c_name:<19}{C.RST} {C.DIM}│{C.RST} {c_help}")
+
+        lines.append(f"\n{C.DIM}{'─' * w}{C.RST}")
+        lines.append(f"{C.BLD}{C.GRN}💡 Mẹo:{C.RST} Gõ {C.BLD}patchx LỆNH -h{C.RST} để xem chi tiết đối số từng lệnh.")
+        lines.append(f"{C.BLD}{C.YEL}⚡ Gợi ý chạy nhanh:{C.RST} {C.DIM}patchx pipeline <file.apk> --mode auto{C.RST}\n")
         return "\n".join(lines)
 
 

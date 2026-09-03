@@ -31,19 +31,27 @@ TOOLKIT_COMMANDS = {
 
 
 def print_banner():
-    print("""============================================================================
-   PUSHX — BẢN KẾ THỪA PATCHX CỔ ĐIỂN (LEGACY & COMPATIBILITY BRIDGE)
-============================================================================
- Điểm vào kế thừa bảo tồn đầy đủ các tính năng cổ điển của patchx:
-   • pushx doctor          Chẩn đoán môi trường, công cụ và bộ patch
-   • pushx run             Chạy toàn bộ quy trình thông minh cổ điển
-   • pushx package         Đóng gói phân phối toolkit
-   • pushx install-deps    Cài đặt công cụ phụ thuộc hệ thống
-   • pushx apk-full        Quy trình xử lý APK cổ điển trọn gói
-   • pushx webui           Khởi động giao diện WebUI
-   • pushx <LỆNH> ...      Gọi trực tiếp bất kỳ lệnh nào trong 7 nhóm PatchX
-   • pushx -h / --help     Xem trợ giúp đầy đủ phân theo 7 nhóm tối ưu
-============================================================================""")
+    RST = "\033[0m"
+    BLD = "\033[1m"
+    DIM = "\033[2m"
+    CYN = "\033[96m"
+    YEL = "\033[93m"
+    GRN = "\033[92m"
+    WHT = "\033[97m"
+    w = 78
+    print(f"""{BLD}{YEL}╔{'═' * (w - 2)}╗{RST}
+{BLD}{YEL}║{RST}   {BLD}{WHT}PUSHX — BẢN KẾ THỪA PATCHX CỔ ĐIỂN (LEGACY & COMPATIBILITY BRIDGE){RST}{' ' * 7}{BLD}{YEL}║{RST}
+{BLD}{YEL}╠{'═' * (w - 2)}╣{RST}
+{BLD}{YEL}║{RST} {DIM}Điểm vào kế thừa bảo tồn đầy đủ các tính năng cổ điển của patchx:{RST}{' ' * 9}{BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx doctor{RST}          Chẩn đoán môi trường, công cụ và bộ patch        {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx run{RST}             Chạy toàn bộ quy trình thông minh cổ điển        {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx package{RST}         Đóng gói phân phối toolkit                       {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx install-deps{RST}    Cài đặt công cụ phụ thuộc hệ thống               {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx apk-full{RST}        Quy trình xử lý APK cổ điển trọn gói             {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx webui{RST}           Khởi động giao diện WebUI trực quan              {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {CYN}•{RST} {BLD}pushx <LỆNH> ...{RST}      Gọi trực tiếp bất kỳ lệnh nào trong 7 nhóm PatchX{BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {CYN}•{RST} {BLD}pushx -h / --help{RST}     Xem trợ giúp đầy đủ phân theo 7 nhóm tối ưu      {BLD}{YEL}║{RST}
+{BLD}{YEL}╚{'═' * (w - 2)}╝{RST}""")
 
 
 def main(argv=None):
