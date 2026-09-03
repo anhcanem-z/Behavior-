@@ -183,7 +183,15 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
     - Dùng iptables / VPN filter cục bộ hoặc hook mạng để **chỉ chặn riêng các domain xác thực bản quyền** (ví dụ `api.revenuecat.com`, `play.googleapis.com/androidpublisher`), trong khi vẫn cho phép dữ liệu nội dung chính chạy bình thường.
     - Gửi request đến server chính trong trạng thái "External Auth Timeout".
     - **Kết quả trả về từ Server**: Hệ thống chuyển sang trạng thái Grace Period hoặc Offline Fallback, cho phép mở khóa đầy đủ tính năng trong suốt chu kỳ ân hạn.
-*   **Độ khả thi trong `_patchx`**: **95% Khả thi**. Rất hiệu quả cho các ứng dụng đọc sách, xem video hoặc công cụ AI có cơ chế cache offline.
+#### 🔹 Kinh Nghiệm 12: Client-Server Trust Boundaries & Application-Layer Interception (Phân Tích Giao Tiếp Mạng & Ranh Giới Niềm Tin Máy Chủ)
+*   **Vấn đề & Bối cảnh**:
+    - Khi các ứng dụng hiện đại chuyển dịch từ kiểm tra cục bộ (Client-side validation) sang ủy quyền máy chủ (Server-driven authorization), việc sửa đổi mã Smali đơn thuần không thể thay đổi dữ liệu nếu backend áp dụng xác thực quyền hạn độc lập.
+    - Cần xác định chính xác ranh giới kỹ thuật giữa dữ liệu có thể can thiệp tại client và dữ liệu do máy chủ bảo vệ nghiêm ngặt bằng mật mã.
+*   **Cơ chế chọn lọc & Phương pháp phân tích**:
+    1. **Bắt gói tin tại tầng ứng dụng (Application-Layer Hooking)**: Thay vì giải mã TLS phức tạp ở tầng mạng, can thiệp trực tiếp vào phương thức `Interceptor.intercept` của OkHttp hoặc `getInputStream` của HttpURLConnection để đọc/ghi dữ liệu JSON trước khi mã hóa và sau khi nhận phản hồi từ server.
+    2. **Gỡ ghim chứng chỉ nhị phân (AXML Network Security Config Bypass)**: Sửa trực tiếp `AndroidManifest.xml` nhị phân thông qua `patchx axml-patch --bypass-nsc` để ép ứng dụng tin tưởng chứng chỉ người dùng (User CA) trên Android 7.0+, cho phép chuyển tiếp lưu lượng qua proxy phân tích cục bộ mà không cần can thiệp hệ thống.
+    3. **Phát hiện lỗ hổng tin tưởng client (Zero-Trust Flaws)**: Phân tích các endpoint máy chủ tin tưởng mù quáng các tham số do client gửi lên (như cờ trạng thái, User ID, Client Timestamp) để tái lập cấu hình API hợp lệ.
+*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Đã có công cụ hỗ trợ trực tiếp trong toolkit: `axml-patch --bypass-nsc`, `behavior-pipeline` và `rodata-patch`.
 
 ---
 
@@ -201,12 +209,15 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
  - RevenueCat isActive true   - Protobuf Inspector      - In-place JSON/XML Assets
  - Billing v7 Return OK       - Device ID Rotator Hook  - Fast-Repack Zero Copy
  - Device ID Spoof Macro      - GeoIP/AB Header Spoof   - Fail-Open Route Tamper
+                              - Client-Server Trust Map - NSC SSL Pinning Bypass
 ```
 
 ---
 
 ## 5. NHẬT KÝ HỌC HỎI & CẬP NHẬT KINH NGHIỆM (AUDIT LOG)
 
+*   **2026-09-03 (Phiên phân tích ranh giới niềm tin Client-Server & Bắt gói tin giải mã)**:
+    - Bổ sung Kinh nghiệm 12 về ranh giới niềm tin Client-Server, cơ chế gỡ ghim chứng chỉ nhị phân AXML (`--bypass-nsc`), trích xuất dữ liệu tại tầng Interceptor ứng dụng và kiến trúc phòng thủ Zero Trust backend.
 *   **2026-09-03 (Phiên nâng cao — Đánh lừa Server cấp quyền thật)**:
     - Nghiên cứu chuyên sâu các cơ chế can thiệp luồng dữ liệu outbound để máy chủ tự trả về điều kiện mở khóa (Device ID Rotation, GeoIP/AB Test Spoofing, API Mass Assignment, Receipt Replay, Fail-Open Grace Mode).
     - Đánh giá tính khả thi và bổ sung 5 kỹ thuật mới (Kinh nghiệm 7 đến 11) vào kho tri thức.
