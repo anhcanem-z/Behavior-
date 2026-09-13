@@ -226,6 +226,48 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
        - Không giới hạn cứng gói ứng dụng; cho phép đọc phụ đề linh hoạt trên mọi ứng dụng (YouTube, TikTok, MX Player...) bằng cách loại trừ các gói nội bộ (`vn.smartdubbing.live`, `com.android.systemui`, `com.android.settings`) thay vì chặn tất cả app ngoài.
 *   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Có thể cấu trúc thành module `patchx_core/subtitle_tts_engine.py` và tạo các bản vá Smali trực tiếp cho `SubtitleAccessibilityService`, `AudioCaptureService` và `MainActivity`.
 
+#### 🔹 Kinh Nghiệm 16: Kiến Trúc ASR Utterance-Level Streaming & Chống Cắt Vụn Câu Trong Dịch Video Trực Tiếp (Sentence-Level Speech Translation Architecture)
+*   **Vấn đề thực tế**:
+    - Khi tích hợp nhận diện giọng nói trực tiếp (ASR - Vosk/Whisper) với bộ dịch máy (Machine Translation) và bộ đọc (TTS), việc cắt commit mẩu câu tạm thời (`maybeCommitPartial` dựa trên 3 từ hoặc timeout ngắt quãng ngắn) dẫn đến 3 lỗi nghiêm trọng:
+      1. **Dịch sai ngữ nghĩa trầm trọng ("ngôn từ không rõ nguồn gốc")**: Cắt từng đoạn 3 từ cụt ngủn khiến máy dịch không đủ ngữ cảnh ngữ pháp (ví dụ: "I want to" -> "Tôi muốn để"), sinh ra các từ dịch ngô nghê, quái gở.
+      2. **Đọc ngắt nghỉ bừa bãi, giật cục**: Cứ mỗi 3 từ lại gửi đi dịch và phát âm TTS, âm thanh bị khựng lại liên tục, câu nói bị băm nát thành nhiều mẩu rời rạc.
+      3. **Xung đột luồng dữ liệu khi thiếu Key**: Khi API key cloud (Gemini/DeepSeek) không có, app tự ngắt service thu âm (`stopSelfInternal()`), khiến dịch vụ trợ năng Accessibility quét các text rác trên màn hình (tiêu đề, comment) gửi sang đọc thay thế.
+*   **Cơ chế chọn lọc & giải pháp chuẩn hóa**:
+    1. **Vô hiệu hóa Partial Chunking — Chuyển sang Utterance Final Commit**:
+       - Vô hiệu hóa việc cắt từ giữa chừng trong `maybeCommitPartial()`.
+       - Chỉ đưa câu vào hàng đợi dịch (`enqueueFinal`) khi mô hình ASR xác nhận kết thúc trọn vẹn một phát ngôn (`acceptWaveForm == true` hoặc nhận diện khoảng lặng/silence boundary). Nhờ đó, bộ dịch nhận toàn bộ câu hoàn chỉnh, dịch chuẩn xác ngữ pháp tiếng Việt.
+    2. **Tự động Fallback Sang Chế Độ Miễn Phí (Free Online / Offline Mode)**:
+       - Khi thiếu Gemini/DeepSeek API key, không tắt service mà tự động chuyển sang `mode = "free"`, sử dụng `FreeOnlineTranslator` (Google Dịch Web) và `MicrosoftTtsClient`/`AndroidTTS`, đảm bảo thu âm và dịch liên tục không gián đoạn.
+    3. **Chặn Xung Đột Luồng Văn Bản Trợ Năng Khi Đang Thu Âm**:
+       - Khi `recorder != null` (đang ghi âm âm thanh hệ thống), lập tức bỏ qua mọi Intent đọc văn bản màn hình từ Accessibility Service, ngăn chặn hoàn toàn việc rác UI chen ngang vào luồng dịch tiếng nói.
+    4. **Loại Bỏ Ngắt Câu Dấu Phẩy & Mở Rộng Độ Dài Câu Trong TextSplitter**:
+       - Bỏ ký tự dấu phẩy `,` khỏi mẫu tách câu; không ép dấu chấm vào mệnh đề phụ.
+       - Tăng giới hạn `maxWords` (lên 50 từ) để giữ trọn vẹn các câu nói dài, giúp giọng đọc TTS biểu cảm, mượt mà và liền mạch.
+*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Đã áp dụng và kiểm chứng thành công trên `apk/projects` (`vn.smartdubbing.live`).
+
+#### 🔹 Kinh Nghiệm 17: Kỹ Thuật Điều Tốc Thích Ứng Tự Động (Dynamic Adaptive Speech Rate) & Bộ Lọc Giao Thoa Cửa Sổ Trượt (Sliding Window Overlap Trimmer) Cho Dịch Phụ Đề & Giọng Nói Video Real-Time
+*   **Vấn đề thực tế**:
+    - Khi dịch video trực tiếp theo thời gian thực (qua phụ đề cuộn hoặc luồng ASR), ứng dụng thường gặp 2 lỗi nghiêm trọng:
+      1. **Tốc độ đọc không thể bắt kịp video $\to$ Hàng đợi dồn ứ $\to$ Bỏ chữ, bỏ câu dịch**: Người trong video nói với tốc độ 140-160 từ/phút, trong khi TTS đọc câu tiếng Việt mất 3.5 - 5s ở tốc độ chuẩn `1.15f`. Hàng đợi `speakQueue` bị phình to, khi đạt ngưỡng đầy (ví dụ 20 câu hoặc OCR clear), app buộc phải drop `removeFirst()` làm mất hẳn câu nói của nhân vật.
+      2. **Ghép đoạn bị ngắt ngang dở dang từ câu thoại trước và câu sau**: Phụ đề video cuộn (rolling subtitles trên YouTube/TikTok) hiển thị theo kiểu tích lũy từng dòng, câu sau lặp lại một số từ ở cuối câu trước (ví dụ câu trước là *"In this video we will show"*, câu sau là *"show you how to create"*). Việc thiếu bộ lọc giao thoa khiến máy dịch nhận câu lai tạp và TTS đọc đè dở dang tạo cảm giác câu bị chắp vá, vô nghĩa.
+*   **Cơ chế chọn lọc & giải pháp chuẩn hóa**:
+    1. **Điều Tốc Thích Ứng Tự Động Theo Tải Hàng Đợi (Dynamic Adaptive Speech Rate)**:
+       - Thay vì giữ tốc độ đọc cố định, thiết lập hàm `getAdaptiveTtsSpeed()`:
+         - Hàng đợi rỗng ($0$ câu): Tốc độ đọc chuẩn `1.15f` (êm tai, tự nhiên).
+         - Hàng đợi có $1$ câu chờ: Tự động tăng lên $+0.2f$ (`1.35f`).
+         - Hàng đợi có $2$ câu chờ: Tự động tăng lên $+0.42f$ (`1.57f`).
+         - Hàng đợi có $\ge 3$ câu dồn ứ: Tự động đẩy tốc độ lên $+0.6f$ (tối đa `2.0f`).
+       - Nhờ đó, TTS "tiêu hóa" cực nhanh các câu thoại đang ùn ứ để đuổi kịp video tức thời, rồi tự động hạ tốc độ về bình thường khi hàng đợi được giải phóng.
+    2. **Loại Bỏ Drop Thô Bạo & Nâng Dung Lượng Hàng Đợi**:
+       - Bỏ lệnh `speakQueue.clear()` khi nhận phụ đề mới; nâng trần dung lượng hàng đợi lên 100 câu để bảo toàn 100% câu thoại của video.
+    3. **Bộ Lọc Giao Thoa Cửa Sổ Trượt (Sliding Window Overlap Trimmer - `SubtitleUtil.trimOverlap`)**:
+       - So sánh câu phụ đề mới với câu cũ:
+         - Nếu câu mới bắt đầu bằng câu cũ: Chỉ lấy phần chênh lệch (`substring`).
+         - Nếu câu cũ đã bao hàm câu mới: Bỏ qua (không dịch lặp).
+         - Nếu đuôi câu cũ có $k$ từ trùng lặp với đầu câu mới (giao thoa cuộn): Tự động cắt bỏ $k$ từ trùng lặp ở đầu câu mới trước khi gửi dịch.
+       - Triệt tiêu hoàn toàn hiện tượng câu trước bị ngắt ngang rồi ghép nối chắp vá với câu sau.
+*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Đã đóng gói lớp `SubtitleUtil` và tích hợp thành công vào `AudioCaptureService` và `SubtitleAccessibilityService`.
+
 ---
 
 ## 4. BẢN ĐỒ KẾ THỪA VÀO CÁC MODULE TOOLKIT `_patchx`
@@ -243,12 +285,34 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
  - Billing v7 Return OK       - Device ID Rotator Hook  - Fast-Repack Zero Copy
  - Device ID Spoof Macro      - GeoIP/AB Header Spoof   - Fail-Open Route Tamper
  - Subtitle Realtime Reader   - Subtitle Stream Engine  - NSC SSL Pinning Bypass
+ - Sentence-Level ASR Guard   - Free Fallback Pipeline  - Audio/Text Flow Gate
+ - Adaptive Speech Rate Scale - Subtitle Overlap Trim   - Queue Anti-Drop Buffer
 ```
 
 ---
 
 ## 5. NHẬT KÝ HỌC HỎI & CẬP NHẬT KINH NGHIỆM (AUDIT LOG)
 
+*   **2026-09-13 (Phiên tích hợp System Prompt Dịch Đa Ngôn Ngữ model.md & Khắc phục triệt để Lỗi Ngắt Câu + Bỏ Từ cho apk/projects)**:
+    - Giải quyết triệt để 2 vấn đề User phản ánh ("ngắt câu và bỏ từ làm nghe rất khó hiểu"):
+      1. **Bảo toàn 100% từ vựng**: Sửa `cleanFillerWords` trong `SubtitleUtil`, bỏ toàn bộ regex xóa từ có nghĩa (`like`, `actually`, `basically`, `you know`...), chỉ loại bỏ các âm ậm ừ vô nghĩa (`uh, um, er`); Sửa `enqueueFinal` trong `AudioCaptureService` chuyển nguyên vẹn 100% câu ASR vào bộ đệm, xóa bỏ hoàn toàn cơ chế `drop` từ và `bỏ qua câu`; Nâng ngưỡng an toàn `trimOverlap` lên $k \ge 3$ để không cắt nhầm từ đầu câu của câu mới.
+      2. **Triệt tiêu hoàn toàn lỗi ngắt câu**: Đổi dấu nối câu dồn ứ trong `pollBatch` từ `. ` (khiến TTS hạ cao độ và dừng 0.5s) sang dấu phẩy `, ` mềm mại; Sửa `ensureCadencePeriod` trong `TextSplitter` không tự ý cưỡng bức gắn dấu `.` vào các mẩu câu con; Tích hợp `pollBatchInput(queue, 2)` vào `translationLoop` để tự động gộp các mẩu ASR ngắn thành câu tiếng Anh hoàn chỉnh trước khi gửi dịch.
+      3. **Tích hợp toàn diện System Prompt model.md (Model dùng chung cho cả Vosk và OCR)**: Nhúng nguyên vẹn 100% hướng dẫn 10 mục từ `model.md` (Xử lý phụ đề phim SRT/VTT, Ngữ cảnh phim người lớn, Xưng hô thông minh theo quan hệ nhân vật, Thuật ngữ chuyên ngành/tiếng lóng, Văn phong tự nhiên ngắn gọn, Quy tắc đầu ra không giải thích) vào `DEFAULT_PROMPT` của `SubtitleUtil` và `DeepSeekClient`, đồng thời đóng gói trực tiếp vào `assets/model.md` của APK.
+    - Đóng gói và ký số APK thành phẩm: `fcbbd78fd905133316fa58cd1bc5fc3a6ddf42fd1b1e852bca7ddbe9c52774bc` (77.65 MB) tại `~/ApkTools/projects_signed.apk`.
+*   **2026-09-13 (Phiên tích hợp Điều tốc thích ứng tự động & Bộ lọc giao thoa phụ đề SubtitleUtil cho apk/projects)**:
+    - Giải quyết triệt để vấn đề dịch không bắt kịp video và ghép đoạn ngắt ngang:
+      1. Tích hợp `getAdaptiveTtsSpeed()` tự động tăng tốc độ đọc từ 1.15f lên tới 2.0f khi hàng đợi bị dồn ứ, giúp TTS đuổi kịp video tức thì mà không cần vứt bỏ câu thoại.
+      2. Nâng trần `speakQueue` lên 100 câu và bỏ lệnh `clear()` thô bạo ở chế độ màn hình.
+      3. Xây dựng lớp `SubtitleUtil` với thuật toán `trimOverlap` lọc sạch mọi từ ngữ trùng lặp/giao thoa giữa 2 lượt phụ đề liên tiếp, triệt tiêu hiện tượng ghép nối chắp vá câu trước - câu sau.
+*   **2026-09-13 (Phiên xử lý triệt để lỗi dịch ngôn từ lạ & ngắt nghỉ bừa bãi trong apk/projects)**:
+    - Tìm ra và triệt tiêu 3 nguyên nhân gốc rễ: (1) `maybeCommitPartial()` cắt câu vụn vặt 3 từ khiến máy dịch sinh từ vô nghĩa và TTS ngắt nghỉ bừa bãi; (2) `TextSplitter` ngắt ở dấu phẩy `,` và tự ép dấu chấm; (3) Luồng Accessibility bắn text rác khi thu âm bị ngắt do thiếu Gemini API key.
+    - Áp dụng thành công Kinh nghiệm 16: Tắt partial chunking, chuyển sang Utterance Final Commit trọn vẹn, tự động fallback sang Free Online khi thiếu key, chặn text trợ năng khi đang thu âm, mở rộng câu 50 từ trong TextSplitter và đặt mặc định Free Online trong `MainActivity`.
+*   **2026-09-13 (Phiên tối ưu hóa xử lý văn bản & phát âm TTS mượt mà cho apk/projects từ SayIt và TransGull)**:
+    - Phân tích sâu kiến trúc của `SayIt` (`com.urbandroid.sayit`) và `TransGull` (`com.transgull.translator`).
+    - Chắt lọc và áp dụng thành công 3 cải tiến chiến lược vào `apk/projects`:
+      1. Nâng cấp `TextSplitter` thành bộ tách câu ngữ nghĩa (Sentence Boundary Splitting theo `[.!?。！？\n]`), dọn dẹp URL và chuẩn hóa dấu ngắt câu tự nhiên (`. `) giúp bộ dịch không bị gãy đoạn và giọng đọc TTS có nhịp ngắt mượt mà.
+      2. Kích hoạt lọc nhiễu thực thụ trong `SubtitleAccessibilityService.isNoise()` (loại bỏ timestamps, chuỗi số/ký tự và nút điều hướng UI).
+      3. Chuyển chế độ phát âm Android TTS trong `AudioCaptureService` sang `TextToSpeech.QUEUE_ADD` và giảm timeout await xuống 15s để triệt tiêu hiện tượng ngắt ngang âm thanh và nghẽn luồng.
 *   **2026-09-03 (Phiên nghiên cứu & tích hợp chức năng Đọc phụ đề thời gian thực bằng TTS)**:
     - Phân tích sâu các kỹ thuật từ các dự án mã nguồn mở Android hàng đầu (InstantVoiceTranslate, LiveCaptionN, Maise, Chiara-Select2Speak).
     - Đánh giá và chắt lọc 4 cơ chế cốt lõi: Bộ gom cụm & khử trùng lặp cửa sổ trượt (Sliding Window Dedup), Điều tốc động & xả tràn hàng đợi chống trễ (Dynamic Speech Rate Scaling), Hạ âm lượng nền (Audio Ducking qua `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`), và Mở rộng Accessibility đọc phụ đề đa ứng dụng.

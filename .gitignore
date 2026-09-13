@@ -20,3 +20,11 @@ a.txt
 libso/
 libso_clean/
 patchx_core/patchx_core/
+Project/
+Projects/
+apk_trees/
+scratch/
+temp_apk/
+temp_old_apk/
+temp_*.smali
+

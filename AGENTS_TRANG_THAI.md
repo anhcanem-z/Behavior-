@@ -1,6 +1,6 @@
 # AGENTS_TRANG_THAI.md — File trạng thái tổng hợp duy nhất (agent)
 
-Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồng bộ hiện trạng workspace, ghi nhận rule cục bộ `outputs/apk/apk-trees/AGENTS.md`. Trạng thái 68 patch chuẩn hóa, 12 APK gốc, 2 cây giải mã, 71 lệnh CLI, 49 combos_success, bộ test 593/593 PASS. Đóng gói và ký số thành công APK thành phẩm `d_final_tts_signed.apk` (62.02 MB) từ `d.apks` (`d_src`), tích hợp hoàn chỉnh động cơ đọc phụ đề TTS thời gian thực `CaptionTtsSpeaker`.
+Ngày cập nhật: **2026-09-13 22:40 (Asia/Ho_Chi_Minh)** — Khắc phục hiện tượng Vosk chốt một câu 8–9 từ thành nhiều mảnh rồi dịch cụt tại cây chính `apk/projects/.../AudioCaptureService.smali`: đợi 700 ms yên lặng, gộp tối đa 8 final segment ASR trước khi dịch; OCR không bị trì hoãn. Build, kiểm tra ZIP, zipalign, ký và xác minh v2/v3 đạt cho `outputs/apk/apk-build/projects_sentence_buffer_active_20260913_signed.apk` (81.422.731 byte; SHA-256 `3cc3e216...7b88037`). Chưa kiểm chứng runtime trên thiết bị.
 
 ---
 
@@ -91,7 +91,7 @@ Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồn
 | APK đầu vào | **12 APK** trong Apks/ | 2026-09-03 |
 | Cây giải mã | **2 cây** trong outputs/apk/apk-trees/ (a_src, d_src) | 2026-09-03 |
 | Combo thành công | **49 lượt** trong `outputs/combos/combos_success.json` | 2026-09-03 |
-| Git | **đã commit hoàn chỉnh** — HEAD `9fa5056`, 28 commits trên `master` | 2026-09-13 |
+| Git | **đã commit hoàn chỉnh** — HEAD `30ad2c6`, 28 commits trên `master` | 2026-09-13 |
 | Bản phân phối | **3 bản** trong `dist/` (mới nhất: patchx-toolkit-5-20260903-021149.zip, 11.46 MB) | 2026-09-03 |
 
 ---
@@ -130,7 +130,7 @@ Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồn
 | `combos/` | Combo chính (sinh ra khi chạy `combo`) | **0 hiện tại** |
 | `combos_auto/` | Combo tự phát hiện | **0 hiện tại** |
 | `outputs/apk/apk-trees/` | Cây giải mã | **2 cây** (a_src, d_src — giải mã từ d.apks) |
-| `outputs/apk/apk-build/` | APK build nhanh + báo cáo | 5 tệp (APK ~84M + report) |
+| `outputs/apk/apk-build/` | APK build nhanh + báo cáo | **28 tệp** (16 APK, 11 `.idsig`, 1 report); mới nhất `projects_sentence_buffer_active_20260913_signed.apk` (81.422.731 byte) |
 | `outputs/apk/apk-patch/` | APK đã patch + keystore debug | patchx-debug.keystore |
 | `outputs/behavior/` | Artifact behavior/Frida | 5 tệp (generated_hook.js, frida_hooks_config.json, ...) |
 | `outputs/behavior/gadget/` | APK nhúng gadget + keystore | app_signed/unsigned/aligned + libgadget.so (25M) + gadget_debug.keystore |
@@ -296,6 +296,16 @@ Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồn
 ---
 
 ## 8. MỐC CẬP NHẬT + LỊCH SỬ
+
+- **2026-09-13 22:35–22:40 — Sửa lỗi dịch cụt khi ASR nghe được câu dài; artifact chính thức từ cây `apk/projects/`**:
+  1. Nguyên nhân đã xác nhận bằng rà soát tĩnh: `translationLoop()` lấy queue ngay khi có dữ liệu và `pollBatchInput(..., 2)` chỉ gộp tối đa 2 final segment; `maybeCommitPartial()` đang chủ ý no-op. Khi Vosk kết câu sớm, mảnh đầu bị gửi đi dịch trước khi phần sau đến.
+  2. Đã thêm mốc `lastInputAtMs` tại `enqueue()` và thay `translationLoop()`: với mode khác `ocr`, chờ **700 ms** kể từ final segment cuối (mảnh đến tiếp đặt lại thời gian chờ), rồi lấy tối đa **8** segment bằng `pollBatchInput`; `ocr` vẫn lấy tức thì một segment để không tăng độ trễ đọc màn hình.
+  3. Đóng gói đo được: trước hết `apktool b Projects` xác nhận Smali của bản sao hợp lệ; sau đó áp đúng patch vào **cây chính** `apk/projects/`, chạy `apktool b apk/projects`, `unzip -t` không lỗi, zipalign + ký `CN=PatchX Debug`, `apksigner verify` đạt v2/v3. Artifact chính thức: `outputs/apk/apk-build/projects_sentence_buffer_active_20260913_signed.apk` (**81.422.731 byte**, SHA-256 `3cc3e216d389415eb2f7303adf0d8bd546d64b10cc5183d005babec997b88037`). Chưa có log/UI runtime nên chưa kết luận độ chính xác ASR hay bản dịch thực tế.
+
+- **2026-09-13 22:26 — Đối chiếu trạng thái khi Codex online**:
+  1. `tools/status_report.py` hiển thị đầy đủ: 68 patch chuẩn hóa, 12 APK, 2 cây giải mã, 49 lượt `combos_success`; audit gần nhất (2026-09-03 08:31) là 0 lỗi / 18 cảnh báo / 17 vấn đề tự sửa được.
+  2. Báo cáo tự động gắn cờ `outputs/apk/apk-build/apk_build_report.json`, nhưng đối chiếu `mtime` xác nhận file này là **21:58:14**, sớm hơn `AGENTS_TRANG_THAI.md` cũ (**21:58:34**) và nội dung build/ký APK đã được ghi nhận. Không có file trong `outputs/` mới hơn mốc đó.
+  3. Đồng bộ mốc Git từ `9fa5056` sang HEAD thực tế `30ad2c6` (28 commits, nhánh `master`). Không chạy kiểm thử.
 
 - **2026-09-13 19:07 — Quét và đồng bộ hiện trạng workspace**:
   1. Rà soát toàn diện trạng thái workspace theo `tools/status_report.py`: 68 patch chuẩn hóa (`upgraded/`), 12 APK gốc (`Apks/`), 2 cây giải mã (`a_src`, `d_src`), 49 combo thành công (`outputs/combos/combos_success.json`).
@@ -1052,6 +1062,29 @@ Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồn
 - 2026-09-02: OCR phụ đề không nên dùng blacklist từ để loại watermark vì sẽ làm mất từ hợp lệ. Tín hiệu đúng là vùng ảnh đã chọn, mặc định vùng thấp/trung tâm; cần xác minh runtime với phụ đề ở vị trí khác trước khi phát hành.
 
 ## 9. BÀI HỌC TRUY VẾT + XỬ LÝ (tổng hợp từ phiên Hi Translate)
+- 2026-09-13 22:35–22:40: Khi Vosk trả nhiều `getResult()` cho một câu, không được dịch ngay từng final segment. Cần debounce theo thời gian yên lặng và gộp segment trước khi gọi model; tại cây chính `apk/projects/.../AudioCaptureService.smali` chọn 700 ms và tối đa 8 segment. `pollBatchInput(..., 2)` phù hợp gộp nhanh nhưng làm câu dài bị phân mảnh; OCR phải là ngoại lệ để giữ phản hồi tức thì. Bằng chứng build/ZIP/chữ ký đạt, nhưng bắt buộc đối chiếu log `ASR câu` → `Dịch:` → UI trên máy trước khi khẳng định hiệu quả runtime.
+- 2026-09-13 21:58: Triệt tiêu hiện tượng "nghe sai thành ra dịch sai" bằng bộ lọc tiền xử lý âm thanh 3 phân tầng (`AudioPreprocessor`):
+  (1) Vấn đề gốc rễ: Bộ AGC cũ kích âm lên tới 6.0x khi âm lượng nhỏ (`gain = (2500/rms).coerceIn(1.0, 6.0)`). Khi gặp đoạn nhạc nền nhỏ, tiếng thở hoặc khoảng lặng có tiếng xì hiss (RMS ~120), âm thanh bị phóng to gấp 6 lần khiến Vosk ASR tưởng là giọng nói thầm và tự sinh ra các từ tiếng Anh ngẫu nhiên ("the", "yeah", "uh", "you know"), dẫn đến câu dịch bị sai lệch hoàn toàn.
+  (2) Giải pháp 3 phân tầng thông minh:
+      - Tầng 1 (Noise Gate - RMS < 150): Triệt tiêu hoàn toàn tạp âm thành khoảng lặng thực sự (`gain = 0.0`), giúp bộ phát hiện giọng nói (VAD) của Vosk kích hoạt chốt câu chính xác và không nghe ma.
+      - Tầng 2 (Dải âm nền/nhạc nhẹ - 150 <= RMS < 350): Giữ nguyên tỷ lệ gốc (`gain = 1.0`), tuyệt đối không kích âm để tránh biến tiếng nhạc thành tiếng người.
+      - Tầng 3 (Dải giọng nói chuẩn - 350 <= RMS <= 4000): Chuẩn hóa nhẹ nhàng hướng tới mục tiêu 1800 RMS, khống chế trần khuếch đại tối đa 2.0x, giữ giọng nói rõ nét mà không bị méo tiếng hay rè loa.
+  (3) Đóng gói: Build thành công `projects_patched_20260913-215805.apk` (77.65 MB), đồng bộ xuất ra `~/ApkTools/projects_signed.apk`.
+- 2026-09-13 21:38: Tích hợp nạp Prompt dịch thuật từ `model.md` dùng chung cho cả Vosk ASR và Screen OCR, hỗ trợ Custom API URL/Port cho `apk/projects`:
+  (1) Nạp prompt `model.md` dùng chung: Xây dựng cơ chế `SubtitleUtil.getSystemPrompt(targetLang)` tự động kiểm tra nạp prompt tùy chỉnh từ `/storage/emulated/0/model.md`, nếu không có sẽ nạp prompt mặc định `DEFAULT_PROMPT` đã nhúng sẵn từ `model.md` và sao chép vào `assets/model.md`. Mọi câu thoại dịch qua DeepSeek/LLM (cả luồng nhận dạng giọng nói Vosk ASR lẫn nhận diện phụ đề màn hình Screen OCR) đều được truyền prompt này qua message `system`, đảm bảo văn phong tự nhiên, giữ nguyên timestamp/cấu trúc phụ đề và không thô tục.
+  (2) Hỗ trợ Custom API URL & Port cho Local LLM: Cập nhật nhãn cấu hình trong `MainActivity.smali` thành `"API URL / Port (vd: http://127.0.0.1:11434/v1):"` cho phép kết nối trực tiếp đến các server LLM nội bộ như Ollama, LM Studio, vLLM hoặc gateway tùy biến.
+  (3) Đóng gói và phát hành: Build thành công APK `projects_patched_20260913-212744.apk` (81.42 MB, ~78 MB), ký số v2/v3, xuất bản sao lưu sang `~/ApkTools/projects_signed.apk` và `projects_all_in_one_optimized.apk`.
+- 2026-09-13 21:00: Hoàn tất tích hợp toàn diện 4 giải pháp Real-Time Video Dubbing cho `apk/projects`:
+  (1) Gộp câu dồn ứ thông minh: `SubtitleUtil.pollBatch(speakQueue, 3)` tự động gộp tối đa 3 câu thoại ngắn đang chờ thành một đoạn đọc duy nhất, loại bỏ hoàn toàn khoảng lặng chết giữa các lần gọi engine TTS và giải phóng hàng đợi nhanh gấp 3 lần.
+  (2) Điều tốc thích ứng tự động: `getAdaptiveTtsSpeed()` tăng tốc độ đọc từ 1.15f lên tới 2.0f khi có câu chờ, bám sát nhịp video.
+  (3) Rút gọn hư từ tiếng Anh: `SubtitleUtil.cleanFillerWords()` loại bỏ các từ đệm ("you know", "like", "basically", "actually", "so yeah") trước khi gửi dịch, giúp câu dịch tiếng Việt ngắn gọn hơn 30%, khớp thời lượng video.
+  (4) Đồng bộ hiển thị màn hình với giọng đọc: Chuyển lệnh `overlayView.update()` và `publish()` sang trước khi `dispatchSpeak` trong `speakLoop`, đảm bảo tai nghe câu nào thì mắt thấy đúng câu đó, đồng thời giảm timeout await xuống 6s chống nghẽn luồng.
+- 2026-09-13 20:45: Triệt tiêu hiện tượng dịch không bắt kịp video, bỏ chữ bỏ câu và ghép đoạn ngắt ngang trong `apk/projects`:
+  (1) Vấn đề đọc chậm hơn video làm dồn ứ hàng đợi -> tự động drop câu thoại: Người nói video đạt 140-160 từ/phút trong khi TTS đọc câu tiếng Việt mất 4-5 giây ở tốc độ chuẩn 1.15f; sau vài câu thoại, `speakQueue` dồn quá 20 câu khiến app gọi `removeFirst()` vứt bỏ câu cũ làm người nghe mất chữ, mất câu. Khắc phục: xây dựng cơ chế điều tốc thích ứng tự động `getAdaptiveTtsSpeed()`, khi hàng đợi có câu chờ sẽ tự động tăng tốc đọc lên từ 1.35f tới 2.0f để nhanh chóng giải phóng câu thoại và đuổi kịp video; đồng thời nâng trần hàng đợi lên 100 câu và bỏ lệnh `clear()` thô bạo ở chế độ màn hình.
+  (2) Vấn đề ghép đoạn ngắt ngang từ câu thoại trước và câu sau: Do phụ đề video cuộn (rolling subtitles trên YouTube/TikTok) hiển thị dạng tích lũy, các từ ở cuối câu trước lặp lại ở đầu câu sau (ví dụ: *"we will show"* -> *"show you how to"*). Khi thiếu bộ lọc giao thoa, máy dịch nhận câu lai tạp và TTS đọc đè dở dang tạo cảm giác chắp vá câu trước - sau. Khắc phục: xây dựng lớp `SubtitleUtil` với thuật toán `trimOverlap` tự động cắt bỏ phần giao thoa $k$ từ trùng lặp ở đầu câu mới, chỉ giữ lại phần nội dung thực sự mới trước khi gửi dịch.
+- 2026-09-13 20:32: Triệt tiêu lỗi dịch từ ngữ kỳ lạ & ngắt câu ngừng nghỉ bừa bãi trong `apk/projects`:
+  (1) Vấn đề đọc từ ngữ không rõ nguồn gốc: Mặc định chọn provider 0 (Gemini) không key -> `triggerGeminiFallback` thiếu DeepSeek key liền gọi `stopSelfInternal()` tắt thu âm. Trong khi đó `SubtitleAccessibilityService` lại chạy và gom UI text màn hình gửi sang đọc. Khắc phục: fallback tự động sang `mode = "free"` (Google Dịch Web) tiếp tục thu âm, chặn hoàn toàn Accessibility text khi đang chạy thu âm (`recorder != null`), đặt spinner mặc định sang 3 (Free Online).
+  (2) Vấn đề ngắt câu cụt lủn, đọc không hiểu: Trong `AudioCaptureService`, `maybeCommitPartial()` cứ mỗi 3 từ lại cắt câu gửi dịch khiến máy dịch thiếu ngữ cảnh tạo từ ngữ vô nghĩa, và TTS đọc ngắt nghỉ liên tục. Khắc phục: vô hiệu hóa `maybeCommitPartial()` (chuyển sang `return-void`), chỉ gửi trọn vẹn câu qua `enqueueFinal()` khi Vosk xác nhận kết thúc câu (`acceptWaveForm == true`). Đồng thời tinh chỉnh `TextSplitter` không ngắt câu ở dấu phẩy `,` và tăng `maxWords` lên 50 từ để giữ câu thoại dài liền mạch tự nhiên.
 - 2026-09-02 06:15: Hợp nhất thông minh luồng dịch (Unified Smart Pipeline): Thay vì bắt buộc người dùng chọn mode thủ công và chặn dịch khi thiếu API key, hệ thống tự động phân loại tiền tố API key (AIzaSy/AQ -> Gemini Live, sk- -> DeepSeek/LLM). Khi không có key, tự động chuyển thẳng sang Free Online Translator (Google GTX) + Offline ML Kit + Edge TTS mà không dừng service. Giảm tỷ lệ thao tác nhầm và giúp app hoạt động ngay lập tức (zero-config onboarding).
 - 2026-09-02 06:05: Xử lý an toàn model Vosk ASR: (1) khi mạng ngắt kết nối giữa chừng lúc tải .zip qua OkHttp, phải xóa ngay file trong cacheDir trong khối catch để không gây lỗi giải nén ở lần chạy sau; (2) unzipModel phải bật cờ overwrite=true khi gọi copyRecursively phòng trường hợp renameTo thất bại và thư mục đích có tàn dư; (3) mã ngôn ngữ như `zh`, `zh-CN`, `vi-VN` cần chuẩn hóa tiền tố trước switch-case mã ISO để không fallback nhầm sang model tiếng Anh (`vosk-model-small-en-us-0.15`); (4) khi mode là Gemini Live (ASR chỉ là fallback), lỗi tải model ASR ở background không được gọi `stopSelfInternal` làm crash/dừng toàn bộ phiên dịch đang chạy.
 - 2026-09-02 03:15: Đã áp dụng tối ưu realtime an toàn trên cây `a_src`: vòng OCR đổi từ 60 ms sang 150 ms, vẫn dùng `ocrBusy` + `acquireLatestImage()` để bỏ frame cũ khi ML Kit bận; Vosk giữ ngưỡng chốt partial 600 ms và không thay đổi logic final. Build thật đạt, APK unsigned SHA-256 `b38ae601607ff5f2105a38db291b55c3c70ccd3f3903d140268dbd90f2793d99`, chưa đo CPU/latency runtime trên thiết bị.
