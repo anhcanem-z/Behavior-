@@ -1253,6 +1253,106 @@ def cmd_smart_combo(args):
     return 0
 
 
+def cmd_discover(args):
+    """Lệnh phân tích thông minh toàn diện & khai phá mở rộng không giới hạn từ điển."""
+    from .comprehensive_analyzer import UniversalDiscoveryEngine
+    if not os.path.exists(args.target):
+        print("[discover] LỖI: Không tìm thấy mục tiêu: %s" % args.target)
+        return 2
+    engine = UniversalDiscoveryEngine(args.target, output_dir=args.output)
+    res = engine.run_full_discovery()
+    summary = res.get("summary", {})
+    print("\n" + "=" * 70)
+    print("🎯 BÁO CÁO PHÂN TÍCH TOÀN DIỆN & KHAI PHÁ MỞ RỘNG (DISCOVERY)")
+    print("=" * 70)
+    print("Mục tiêu: %s" % res["target"])
+    print("1. Tệp nhạy cảm phát hiện: %d" % summary.get("total_sensitive_assets", 0))
+    for f in res.get("assets_sensitive", {}).get("findings", [])[:8]:
+        sec = f.get("secret_detected") or f.get("type_desc")
+        print("   - [%s] %s (Entropy: %.2f, Tin cậy: %.0f%%)" % (sec, f["file"], f["entropy"], f["confidence"]))
+    print("2. Cổng an ninh hình thái học (Zero-Keyword Gates): %d" % summary.get("total_proven_gates", 0))
+    for g in res.get("morphological_gates", [])[:5]:
+        cond = g.get("proof_chain", {}).get("condition", "")
+        print("   - [%s] %s->%s (%d%%)" % (g["pattern"], g["class"], g["method"], g["confidence"]))
+        print("     Chứng minh: %s" % cond)
+    print("3. Từ vựng & Cờ logic tự học từ APK: %d" % summary.get("total_dynamic_lexicon_terms", 0))
+    lex = res.get("lexicon_mined", {})
+    if lex.get("discovered_flags"):
+        print("   - Cờ logic khai phá: %s" % ", ".join(lex["discovered_flags"][:12]))
+    if lex.get("high_entropy_tokens"):
+        print("   - Token/Key entropy cao: %d chuỗi" % len(lex["high_entropy_tokens"]))
+    print("=" * 70)
+    print("Đã lưu kết quả chi tiết: %s/universal_discovery.json" % engine.output_dir)
+    return 0
+
+
+def cmd_subtitle_tts(args):
+    """Công cụ điều phối & chẩn đoán đọc phụ đề thời gian thực bằng TTS."""
+    from .subtitle_tts_engine import (
+        SubtitleStreamBuffer, SubtitleSpeechQueueManager,
+        SubtitleAccessibilityInspector, format_status_report
+    )
+    print("\n" + "=" * 70)
+    print("🎙️ ĐỘNG CƠ ĐỌC PHỤ ĐỀ THỜI GIAN THỰC (REAL-TIME SUBTITLE TTS)")
+    print("=" * 70)
+    target = getattr(args, "target", None)
+    if target and os.path.exists(target):
+        print("Mục tiêu phân tích: %s" % target)
+        smali_files = glob.glob(os.path.join(target, "**", "*Subtitle*.smali"), recursive=True)
+        if not smali_files:
+            smali_files = glob.glob(os.path.join(target, "**", "*.smali"), recursive=True)
+        found_svc = False
+        for sf in smali_files:
+            try:
+                content = open(sf, encoding="utf-8", errors="ignore").read()
+                if "AccessibilityService" in content or "SubtitleAccessibilityService" in sf:
+                    found_svc = True
+                    insp = SubtitleAccessibilityInspector.inspect_accessibility_smali(content)
+                    print("\n[Phát hiện dịch vụ] %s" % os.path.basename(sf))
+                    if insp["has_issues"]:
+                        for issue in insp["issues"]:
+                            print("  ⚠️ [%s] %s" % (issue["type"], issue["message"]))
+                    else:
+                        print("  ✅ Cấu hình và bộ lọc hợp lệ.")
+            except Exception:
+                pass
+        if not found_svc:
+            print("[subtitle-tts] Đã phân tích mục tiêu. Sử dụng chế độ mô phỏng trực tiếp.")
+    else:
+        print(format_status_report())
+        buf = SubtitleStreamBuffer(debounce_ms=350)
+        chunks = ["Hôm", "Hôm nay", "Hôm nay tôi xin chia sẻ", "Hôm nay tôi xin chia sẻ về cách học ngoại ngữ."]
+        print("Mô phỏng luồng phụ đề streaming:")
+        for c in chunks:
+            emitted = buf.feed(c)
+            if emitted:
+                print("  -> TTS Utterance phát âm: '%s'" % emitted[0])
+        flushed = buf.flush_if_timeout()
+        for f in flushed:
+            print("  -> TTS Debounce phát âm: '%s'" % f)
+
+    print("=" * 70)
+    return 0
+
+
+def cmd_auto_refresh(args):
+    """Tự động reset và bật lại dịch phụ đề + chia sẻ toàn màn hình sau mỗi 2 phút 40 giây."""
+    from .auto_session_refresher import AutoSessionRefresher
+    refresher = AutoSessionRefresher(
+        package=args.package,
+        interval=args.interval,
+        adb_device=args.device,
+        use_root=args.root,
+        speak_tts=not args.no_tts
+    )
+    if args.once:
+        refresher.detect_screen_size()
+        refresher.trigger_reset_cycle()
+    else:
+        refresher.run_loop()
+    return 0
+
+
 def cmd_dex_budget(args):
     """P5 — DEX Resource Manager: ước lượng refs + mức an toàn."""
     from .dex_budget import DEX_METHOD_MAX, budget_report, strategy_for
@@ -2634,6 +2734,71 @@ def cmd_targets(args):
     return 0
 
 
+def cmd_fused_targets(args):
+    """targets-fused — Xác định và phân hạng mục tiêu hợp nhất đa nguồn (Behavior + Security Gates)."""
+    from .fused_target_engine import (
+        fuse_analysis_targets,
+        apply_fused_targets,
+        generate_fused_frida_script,
+        render_fused_targets_markdown,
+    )
+    tree = args.thu_muc
+    if not os.path.isdir(tree):
+        print("[patchx] ❌ Lỗi: Thư mục cây Smali không tồn tại: %s" % tree)
+        return 1
+
+    out_dir = args.out_dir or os.path.join(BASE_DIR, "outputs", "targets_fused")
+    os.makedirs(out_dir, exist_ok=True)
+
+    print("[patchx] 🎯 Đang phân tích mục tiêu hợp nhất (Target-Driven Engine)...")
+    print("  Cây Smali: %s" % tree)
+    res = fuse_analysis_targets(
+        tree,
+        min_behavior_score=args.min_score,
+        min_gate_confidence=args.min_confidence,
+    )
+    summary = res.get("summary", {})
+    targets = res.get("targets", [])
+
+    print("\n[patchx] Đã tìm thấy %d mục tiêu:" % summary.get("total_fused", 0))
+    print("  • Hạng 1 (DUAL_CONFIRMED) : %d (Xác thực kép 100%%)" % summary.get("dual_confirmed", 0))
+    print("  • Hạng 2 (SECURITY_GATE)  : %d (Cổng rẽ nhánh Zero-Workkey)" % summary.get("security_gates", 0))
+    print("  • Hạng 3 (BEHAVIOR_TARGET): %d (Mục tiêu nghiệp vụ)" % summary.get("behavior_targets", 0))
+
+    for idx, t in enumerate(targets[:15], 1):
+        tier_color = C.RED if t["tier"] == "DUAL_CONFIRMED" else (C.YEL if t["tier"] == "SECURITY_GATE" else C.CYN)
+        print("  [%d] %s[%s]%s %s -> %s (%.1f%%)" % (
+            idx, tier_color, t["tier"], C.RST, t.get("class_clean", ""), t.get("method", ""), round(t.get("confidence", 0.0)*100, 1)
+        ))
+        if t.get("decision_branch"):
+            print("      Nhánh rẽ: %s" % t.get("decision_branch"))
+        if t.get("suggested_patch"):
+            print("      Gợi ý vá : %s" % t.get("suggested_patch"))
+
+    json_path = os.path.join(out_dir, "fused_targets.json")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(res, fh, ensure_ascii=False, indent=2)
+
+    md_path = os.path.join(out_dir, "fused_targets.md")
+    with open(md_path, "w", encoding="utf-8") as fh:
+        fh.write(render_fused_targets_markdown(res))
+
+    if getattr(args, "frida_hook", None):
+        frida_file = args.frida_hook if isinstance(args.frida_hook, str) and args.frida_hook.endswith(".js") else os.path.join(out_dir, "fused_hook.js")
+        generate_fused_frida_script(res, frida_file)
+        print("\n[patchx] 💉 Đã sinh Frida hook: %s" % frida_file)
+
+    if getattr(args, "apply", False):
+        print("\n[patchx] ⚙️ Đang can thiệp tự động theo Target (Zero-Editor)...")
+        min_conf = args.min_confidence / 100.0 if args.min_confidence > 1.0 else args.min_confidence
+        patch_res = apply_fused_targets(tree, res, min_confidence=min_conf)
+        print("  • Đã can thiệp thành công: %d cổng logic" % patch_res.get("static_gates_applied", 0))
+        print("  • Tổng số mục tiêu nhắm tới: %d" % patch_res.get("applied_targets_count", 0))
+
+    print("\n[patchx] Báo cáo đã lưu tại: %s" % out_dir)
+    return 0
+
+
 def cmd_smart_patch(args):
     """smart-patch — bản patch thông minh smali, tái dùng detector behavior."""
     from .behavior.smart_patch import apply_smart_patch
@@ -2850,12 +3015,16 @@ COMMAND_GROUPS = [
         ("plan-preflight", "Đánh giá lại draft transaction trước khi áp vào APK"),
         ("behavior", "Phân tích hành vi APK dựa trên bằng chứng và sự kiện"),
         ("targets", "Xác định mục tiêu cần xem xét sửa đổi trong mã nguồn"),
+        ("targets-fused", "Xác định và phân hạng mục tiêu hợp nhất đa nguồn (Behavior + Security Gates)"),
+        ("discover", "Phân tích toàn diện: Quét tệp nhạy cảm (assets/cert/db) & Khai phá từ điển động"),
     ]),
     ("3. ĐIỀU PHỐI PIPELINE HỢP NHẤT & TỰ ĐỘNG HÓA", [
         ("pipeline", "Khởi chạy Pipeline Thống Nhất đa tầng (auto|intake|semantic|fast|native|combo)"),
         ("behavior-pipeline", "Chạy luồng khép kín: detector -> cfg -> target -> hook -> frida"),
         ("gadget-pipeline", "Nhúng Frida Gadget offline vào APK/cây APK (không cần Root)"),
         ("smart-combo", "Tự động sinh combo tối ưu từ Active Learning (AST Smali + combos_success)"),
+        ("subtitle-tts", "Động cơ đọc phụ đề thời gian thực bằng giọng nói TTS (Kinh nghiệm 15)"),
+        ("auto-refresh", "Tự động reset & bật lại dịch phụ đề + chia sẻ toàn màn hình sau mỗi 2m40s"),
     ]),
     ("4. CAN THIỆP NHỊ PHÂN SIÊU TỐC IN-PLACE (<0.5S)", [
         ("fast-patch", "Quy trình 1-Click vá DEX/AXML/ARSC in-place và repack APK siêu tốc"),
@@ -2875,6 +3044,7 @@ COMMAND_GROUPS = [
         ("remote-observe", "Quan sát và điều khiển hành vi từ xa qua Frida"),
         ("remote-patch", "Sinh patch ép flag điều khiển từ xa"),
         ("remote-map", "Tạo bản đồ flag điều khiển từ xa"),
+        ("frida", "Sinh Frida script từ tệp phân tích hành vi"),
     ]),
     ("6. QUẢN TRỊ BỘ PATCH & KHUNG COMBO", [
         ("combo", "Tạo các bộ gộp patch (combos) có độ tương thích cao"),
@@ -2889,6 +3059,7 @@ COMMAND_GROUPS = [
     ("7. KIỂM ĐỊNH CHẤT LƯỢNG & GIAO DIỆN ĐIỀU KHIỂN", [
         ("scan", "Quét thư mục patch và in tóm tắt"),
         ("index", "Tạo patchx_index.json + report.md"),
+        ("report", "Tạo báo cáo HTML cho kho patch"),
         ("dupes", "Phát hiện và phân nhóm patch trùng nội dung"),
         ("manifest", "Tạo MANIFEST.json cho toàn bộ cây thư mục"),
         ("verify-manifest", "Xác minh kho theo MANIFEST.json"),
@@ -2918,6 +3089,14 @@ COMMAND_GROUPS = [
 ]
 
 
+def command_at_position(position):
+    """Trả tên lệnh theo vị trí hiển thị 1-based; ``None`` nếu không hợp lệ."""
+    if not isinstance(position, int) or position < 1:
+        return None
+    commands = [name for _, group in COMMAND_GROUPS for name, _ in group]
+    return commands[position - 1] if position <= len(commands) else None
+
+
 GROUP_COLORS = {
     "1. TIẾP NHẬN & CHẨN ĐOÁN HỆ THỐNG": (C.CYN, "🔍"),
     "2. PHÂN TÍCH NGỮ NGHĨA SÂU & TAINT FLOW (ZERO-WORKKEY)": (C.MAG, "🧠"),
@@ -2942,12 +3121,20 @@ class GroupedArgumentParser(argparse.ArgumentParser):
             "",
             f"{C.BLD}DANH MỤC LỆNH & PIPELINE PHÂN THEO NHÓM CHỨC NĂNG (GỘP CHUỖI TỐI ƯU):{C.RST}",
             f"{C.DIM}{'─' * w}{C.RST}",
+            f"{C.DIM}Số 01–{sum(len(cmds) for _, cmds in COMMAND_GROUPS):02d} là vị trí lệnh thật. Dùng {C.RST}{C.BLD}{C.CYN}python3 pushx <SỐ> [tham số...]{C.RST}",
+            f"{C.DIM}Tên lệnh hiển thị màu trắng; phần mô tả hiển thị màu xám để dễ phân biệt.{C.RST}",
         ]
+        position = 1
         for g_name, cmds in COMMAND_GROUPS:
             col, icon = GROUP_COLORS.get(g_name, (C.CYN, "📁"))
             lines.append(f"\n{C.BLD}{col}{icon} [{g_name}]{C.RST}")
             for c_name, c_help in cmds:
-                lines.append(f"  {col}•{C.RST} {C.BLD}{c_name:<19}{C.RST} {C.DIM}│{C.RST} {c_help}")
+                lines.append(
+                    f"  {col}{position:02d}.{C.RST} "
+                    f"{C.BLD}{C.WHT}{c_name:<19}{C.RST} "
+                    f"{C.DIM}│ {c_help}{C.RST}"
+                )
+                position += 1
 
         lines.append(f"\n{C.DIM}{'─' * w}{C.RST}")
         lines.append(f"{C.BLD}{C.GRN}💡 Mẹo:{C.RST} Gõ {C.BLD}patchx LỆNH -h{C.RST} để xem chi tiết đối số từng lệnh.")
@@ -2988,9 +3175,9 @@ def main(argv=None):
     p.add_argument("-o", "--output-dir", default=None, help="Thư mục output (mặc định: outputs/intake)")
     p.set_defaults(func=cmd_capabilities)
 
-    p = sub.add_parser("pipeline", help="Khởi chạy Pipeline Thống Nhất (auto|intake|semantic|fast|behavior|native|combo)")
+    p = sub.add_parser("pipeline", help="Khởi chạy Pipeline Thống Nhất (auto|intake|semantic|fast|behavior|native|combo|gadget)")
     p.add_argument("artifact", help="Tệp APK, APKS, XAPK hoặc AAB")
-    p.add_argument("--mode", default="auto", choices=["auto", "intake", "semantic", "fast", "behavior", "native", "combo"], help="Chế độ pipeline")
+    p.add_argument("--mode", default="auto", choices=["auto", "intake", "semantic", "fast", "behavior", "native", "combo", "gadget"], help="Chế độ pipeline")
     p.add_argument("-o", "--out", default=None, help="Đường dẫn APK đầu ra (nếu có)")
     p.add_argument("--output-dir", default=None, help="Thư mục xuất báo cáo (mặc định: outputs/pipeline)")
     p.add_argument("--dex-str", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi DEX in-place")
@@ -3067,6 +3254,33 @@ def main(argv=None):
     p = sub.add_parser("targets", help="Xác định mục tiêu cần xem xét sửa đổi")
     p.add_argument("thu_muc", help="Cây APK đã giải mã")
     p.set_defaults(func=cmd_targets)
+
+    p = sub.add_parser("targets-fused", aliases=["fused-targets"], help="Xác định và phân hạng mục tiêu hợp nhất đa nguồn (Behavior + Security Gates)")
+    p.add_argument("thu_muc", help="Cây APK đã giải mã")
+    p.add_argument("--min-score", type=float, default=0.50, help="Điểm tối thiểu cho Behavior Targets (0.0-1.0)")
+    p.add_argument("--min-confidence", type=float, default=70.0, help="Độ tin cậy tối thiểu cho Security Gates (%%)")
+    p.add_argument("-o", "--out-dir", help="Thư mục xuất báo cáo JSON và MD")
+    p.add_argument("--frida-hook", nargs="?", const="default", help="Sinh kịch bản Frida hook đa tầng")
+    p.add_argument("--apply", action="store_true", help="Tự động can thiệp vào mã Smali (Target-Driven thay thế Editor)")
+    p.set_defaults(func=cmd_fused_targets)
+
+    p = sub.add_parser("discover", aliases=["universal-discovery", "deep-scan"], help="Phân tích toàn diện: Quét tệp nhạy cảm (assets/cert/db) & Khai phá từ điển động không giới hạn")
+    p.add_argument("target", help="Tệp APK hoặc cây giải mã Smali")
+    p.add_argument("-o", "--output", default=None, help="Thư mục xuất báo cáo (mặc định: outputs/discovery)")
+    p.set_defaults(func=cmd_discover)
+
+    p = sub.add_parser("subtitle-tts", aliases=["subtitle-reader", "realtime-subtitles"], help="Động cơ & công cụ đọc phụ đề thời gian thực bằng giọng nói TTS")
+    p.add_argument("target", nargs="?", default=None, help="Đường dẫn cây APK hoặc thư mục Smali cần kiểm tra/vá")
+    p.set_defaults(func=cmd_subtitle_tts)
+
+    p = sub.add_parser("auto-refresh", aliases=["auto-session", "auto-reset-translation"], help="Tự động reset và bật lại dịch phụ đề + chia sẻ toàn màn hình sau 2m40s (160s)")
+    p.add_argument("--interval", "-i", type=int, default=160, help="Khoảng thời gian chu kỳ tính bằng giây (mặc định: 160 = 2 phút 40 giây)")
+    p.add_argument("--package", "-p", type=str, default="com.sota.aitranslatex", help="Gói ứng dụng mục tiêu (mặc định: com.sota.aitranslatex)")
+    p.add_argument("--device", "-d", type=str, default=None, help="Địa chỉ thiết bị ADB (ví dụ: 100.64.170.99:5555)")
+    p.add_argument("--root", action="store_true", help="Sử dụng quyền root su trên thiết bị")
+    p.add_argument("--once", action="store_true", help="Chỉ chạy 1 chu kỳ làm mới duy nhất rồi dừng")
+    p.add_argument("--no-tts", action="store_true", help="Không phát âm thông báo qua TTS")
+    p.set_defaults(func=cmd_auto_refresh)
 
     p = sub.add_parser("gadget-pipeline", help="Nhung Frida Gadget vao APK/cay APK (khong root)")
     p.add_argument("input", help="File .apk hoac thu mục cây APK da giai ma")

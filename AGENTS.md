@@ -55,6 +55,18 @@ File trạng thái tổng hợp duy nhất: `AGENTS_TRANG_THAI.md`.
   `HUONG_DAN_GADGET.txt` là tài liệu ưu tiên GIỮ LẠI — luôn đồng bộ đường dẫn
   thư mục khi cấu trúc đổi.
 
+## QUY TẮC KIỂM THỬ (bắt buộc — yêu cầu từ User)
+
+- **Tuyệt đối KHÔNG tự ý chạy kiểm thử** (`tests/run_tests.py`, `simulate`, `golden`, `ci`, `baseline`, v.v.) khi không thật sự cần thiết.
+- **Chỉ được sử dụng kiểm thử khi ĐÃ ĐƯỢC SỰ ĐỒNG Ý HOẶC YÊU CẦU TRỰC TIẾP TỪ USER**.
+- **Ưu tiên rà soát tĩnh**: Phân tích logic, kiểm tra cú pháp, đọc hiểu mã nguồn và đối chiếu cấu trúc; hạn chế tối đa việc chiếm dụng CPU, bộ nhớ và gây gián đoạn phiên làm việc trên môi trường Termux.
+
+## QUY TẮC PHÁT ÂM BÁO CÁO QUA GIỌNG NÓI (TTS) (bắt buộc — vĩnh viễn)
+
+- **MỌI báo cáo kết quả, kết luận, tóm tắt trạng thái hoặc thông báo hoàn thành nhiệm vụ gửi cho User** đều phải đồng thời được phát âm qua giọng nói tiếng Việt bằng lệnh:
+  `python3 tools/speak.py "Nội dung tóm tắt báo cáo"` (hoặc `termux-tts-speak -l vi -r 1.0 "..."`).
+- **Yêu cầu phát âm**: Tóm tắt ngắn gọn, gãy gọn, cô đọng nội dung quan trọng nhất của câu trả lời để User nghe được ngay mà không cần đọc màn hình.
+- **Tính vĩnh viễn**: Mọi phiên làm việc hiện tại và tương lai của Codex/AI đều bắt buộc tuân thủ quy tắc này.
 
 ## GHI NHẬN KINH NGHIỆM SAU MỖI PHIÊN XỬ LÝ (bắt buộc)
 

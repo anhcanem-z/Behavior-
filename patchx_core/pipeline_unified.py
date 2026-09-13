@@ -38,6 +38,8 @@ class UnifiedPipeline:
             os.path.dirname(self.artifact), "pipeline_out"
         ))
         os.makedirs(self.output_dir, exist_ok=True)
+        from patchx_core.blackboard import SharedBlackboard
+        self.blackboard = SharedBlackboard({"artifact_path": self.artifact})
 
     def run(self, mode: str = "auto", **kwargs) -> Dict[str, Any]:
         """Thực thi pipeline theo mode chỉ định."""
@@ -72,8 +74,10 @@ class UnifiedPipeline:
                 self._run_combo_stage(report, **kwargs)
             elif mode == "auto":
                 self._run_auto_hybrid_stage(report, **kwargs)
+            elif mode == "gadget":
+                self._run_gadget_stage(report, **kwargs)
             else:
-                raise ValueError(f"Chế độ pipeline không hợp lệ: '{mode}'. Chọn: auto, intake, semantic, fast, behavior, native, combo.")
+                raise ValueError(f"Chế độ pipeline không hợp lệ: '{mode}'. Chọn: auto, intake, semantic, fast, behavior, native, combo, gadget.")
 
             # Tính verdict tổng quát
             failed_stages = [s["name"] for s in report["stages"] if s.get("status") == "FAIL"]
@@ -107,6 +111,35 @@ class UnifiedPipeline:
         })
         report["outputs"]["intake_json"] = res.get("outputs", {}).get("json")
 
+        struct = res.get("structure", {})
+        abis = struct.get("abis", [])
+        self.blackboard.post("artifact_structure", struct, origin="intake")
+        self.blackboard.post("abis", abis, origin="intake")
+        self.blackboard.post("has_native", len(abis) > 0, origin="intake")
+
+        # Tự động kích hoạt Phân tích toàn diện & Khai phá từ điển động (Open-Ended Discovery)
+        try:
+            from patchx_core.comprehensive_analyzer import UniversalDiscoveryEngine
+            disc_dir = os.path.join(self.output_dir, "discovery")
+            disc_engine = UniversalDiscoveryEngine(self.artifact, output_dir=disc_dir)
+            disc_res = disc_engine.run_full_discovery()
+            self.blackboard.post("universal_findings", disc_res, origin="discovery")
+            self.blackboard.post("dynamic_lexicon", disc_res.get("lexicon_mined", {}), origin="discovery")
+            self.blackboard.post("sensitive_assets", disc_res.get("assets_sensitive", {}), origin="discovery")
+            if disc_res.get("morphological_gates"):
+                self.blackboard.post("morphological_gates", disc_res["morphological_gates"], origin="discovery")
+            report["stages"].append({
+                "name": "universal_discovery",
+                "status": "PASS",
+                "summary": disc_res.get("summary", {}),
+            })
+        except Exception as exc:
+            report["stages"].append({
+                "name": "universal_discovery",
+                "status": "WARN",
+                "reason": str(exc),
+            })
+
     def _run_fast_stage(self, report: Dict[str, Any], **kwargs) -> None:
         """Stage 2: Fast-Path 1-Click Repack."""
         from patchx_core.apk_fast_repack import fast_patch_and_repack
@@ -124,7 +157,8 @@ class UnifiedPipeline:
         axml_replacements = [(k, v) for k, v in axml_str.items()]
         arsc_replacements = [(k, v) for k, v in arsc_str.items()]
 
-        has_patterns = bool(dex_replacements or axml_replacements or arsc_replacements)
+        explicit_patterns = bool(dex_replacements or kwargs.get("axml_replaces") or arsc_replacements)
+        allow_empty = kwargs.get("allow_empty", not explicit_patterns)
         t0 = time.monotonic()
         stats = fast_patch_and_repack(
             self.artifact,
@@ -133,7 +167,7 @@ class UnifiedPipeline:
             arsc_replacements=arsc_replacements if arsc_replacements else None,
             output_apk=out_apk,
             strip_signatures=True,
-            allow_empty=not has_patterns,
+            allow_empty=allow_empty,
         )
         elapsed = round(time.monotonic() - t0, 3)
 
@@ -183,6 +217,8 @@ class UnifiedPipeline:
             "targets_count": len(b_res.get("targets", [])),
         })
         report["outputs"]["frida_hook"] = b_res.get("artifacts", {}).get("hook_script")
+        self.blackboard.post("behavior_targets", b_res.get("targets", []), origin="behavior")
+        self.blackboard.post("smali_tree", tree_dir, origin="behavior")
 
     def _run_native_stage(self, report: Dict[str, Any], **kwargs) -> None:
         """Stage 4: Native .so Analysis & Signature Spoofing."""
@@ -212,12 +248,42 @@ class UnifiedPipeline:
                 "reason": str(exc),
             })
 
+    def _run_gadget_stage(self, report: Dict[str, Any], **kwargs) -> None:
+        """Stage: Nhúng Frida Gadget offline vào APK/Tree (không cần root)."""
+        from patchx_core.behavior.gadget_pipeline import run_gadget_pipeline
+        gadget_out = os.path.join(self.output_dir, "gadget")
+        try:
+            res = run_gadget_pipeline(
+                self.artifact,
+                out_dir=gadget_out,
+                abi=kwargs.get("abi", "arm64-v8a"),
+                interactive=False,
+            )
+            report["stages"].append({
+                "name": "frida_gadget_injection",
+                "status": "PASS" if res.get("ok") else "FAIL",
+                "details": res.get("summary", {}),
+                "output_apk": res.get("artifacts", {}).get("signed_apk"),
+            })
+            if res.get("artifacts", {}).get("signed_apk"):
+                report["outputs"]["gadget_signed_apk"] = res["artifacts"]["signed_apk"]
+        except Exception as exc:
+            report["stages"].append({
+                "name": "frida_gadget_injection",
+                "status": "FAIL",
+                "error": str(exc),
+            })
+
     def _run_combo_stage(self, report: Dict[str, Any], **kwargs) -> None:
         """Stage 5: Active Learning Smart Combo."""
         from patchx_core.learn import generate_smart_combo, save_smart_combo
         intent = kwargs.get("intent", "bypass")
+        collection = kwargs.get("collection") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "upgraded"
+        )
         combo_res = generate_smart_combo(
             self.artifact,
+            collection,
             intent=intent,
             max_patches=kwargs.get("max_patches", 4),
         )
@@ -226,10 +292,14 @@ class UnifiedPipeline:
             save_smart_combo(combo_res, out_combo_file)
             report["outputs"]["smart_combo_zip"] = out_combo_file
 
+        combo_details = {k: v for k, v in combo_res.items() if k != "merged_patch"}
+        if "merged_patch" in combo_res and combo_res["merged_patch"]:
+            combo_details["merged_patch_name"] = getattr(combo_res["merged_patch"], "name", str(combo_res["merged_patch"]))
+
         report["stages"].append({
             "name": "smart_combo_learning",
             "status": "PASS" if combo_res.get("success") else "WARN",
-            "details": combo_res,
+            "details": combo_details,
         })
 
     def _run_semantic_stage(self, report: Dict[str, Any], **kwargs) -> None:
@@ -263,6 +333,8 @@ class UnifiedPipeline:
         with open(out_gates_file, "w", encoding="utf-8") as fh:
             json.dump({"tree": tree_dir, "gates": gates}, fh, ensure_ascii=False, indent=2)
         report["outputs"]["semantic_gates_json"] = out_gates_file
+        self.blackboard.post("security_gates", gates, origin="smali_sem")
+        self.blackboard.post("smali_tree", tree_dir, origin="smali_sem")
 
         if kwargs.get("auto_patch", False):
             from .auto_gate_patcher import apply_security_gates
@@ -302,11 +374,31 @@ class UnifiedPipeline:
         # 6. Active Learning Smart Combo
         self._run_combo_stage(report, **kwargs)
 
+        # 7. Tự động hợp nhất mục tiêu (Fused Target Matrix) từ Blackboard facts
+        tree_dir = self.blackboard.get("smali_tree")
+        if tree_dir and os.path.isdir(tree_dir):
+            try:
+                from patchx_core.fused_target_engine import fuse_analysis_targets, apply_fused_targets
+                fused = fuse_analysis_targets(tree_dir)
+                self.blackboard.post("fused_targets", fused.get("targets", []), origin="fused_target_engine")
+                report["stages"].append({
+                    "name": "fused_target_matrix",
+                    "status": "PASS" if fused.get("summary", {}).get("total_fused", 0) > 0 else "SKIP",
+                    "summary": fused.get("summary", {}),
+                })
+                if kwargs.get("auto_patch", True):
+                    f_applied = apply_fused_targets(tree_dir, fused)
+                    report["outputs"]["fused_targets_applied"] = f_applied.get("static_gates_applied", 0)
+            except Exception:
+                pass
+
+        report["blackboard_summary"] = self.blackboard.summary()
+
     def _write_reports(self, report: Dict[str, Any]) -> None:
         """Ghi báo cáo JSON và Markdown chuẩn hóa."""
         jpath = os.path.join(self.output_dir, "pipeline_report.json")
         with open(jpath, "w", encoding="utf-8") as fh:
-            json.dump(report, fh, ensure_ascii=False, indent=2)
+            json.dump(report, fh, ensure_ascii=False, indent=2, default=str)
         report["outputs"]["report_json"] = jpath
 
         mpath = os.path.join(self.output_dir, "pipeline_report.md")

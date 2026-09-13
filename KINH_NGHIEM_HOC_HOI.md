@@ -206,6 +206,26 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
     - Cấu hình `NetworkSecurityConfig` cho phép `user-certificates` giúp lưu lượng mạng có thể được kiểm toán an toàn trong sandbox.
 *   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Tương thích hoàn toàn với các macro có sẵn trong toolkit.
 
+#### 🔹 Kinh Nghiệm 15: Kiến Trúc & Kỹ Thuật Đọc Phụ Đề Thời Gian Thực Bằng Giọng Nói (Real-Time Subtitle-to-Speech Streaming Architecture)
+*   **Vấn đề thực tế**:
+    - Khi tích hợp tính năng đọc phụ đề thời gian thực (từ Accessibility Service, OCR màn hình hoặc luồng ASR/Dịch video), các ứng dụng thường gặp các hiện tượng:
+      1. **Rác & Giật giọng (Jitter & Voice Stutter)**: Phụ đề streaming hiển thị từng từ (incremental tokens) khiến Accessibility Event/OCR bắn liên tục, TTS đọc đè hoặc đọc lặp từng từ nửa vời ("Hôm", "Hôm nay", "Hôm nay tôi").
+      2. **Dồn ứ hàng đợi âm thanh (Audio Backlog Lag)**: Tốc độ đọc của TTS chậm hơn tốc độ hiển thị phụ đề hoặc đối thoại của video, dẫn đến độ trễ tăng dần hàng chục giây so với hình ảnh thực tế.
+      3. **Xung đột âm thanh nền (Clashing Audio)**: Tiếng nói từ video gốc lấn át giọng đọc TTS khiến người dùng không nghe rõ.
+*   **Cơ chế chọn lọc từ các dự án mã nguồn mở quốc tế (InstantVoiceTranslate, LiveCaptionN, Maise, Chiara)**:
+    1. **Sliding Window Deduplication & Prefix Aggregator**:
+       - Bộ lọc khử trùng lặp cửa sổ trượt: Nếu văn bản mới nhận được chứa tiền tố của văn bản cũ (hoặc ngược lại), tiến hành cập nhật bộ đệm thay vì phát ra utterance TTS mới.
+       - Áp dụng độ trễ Debounce tối ưu (300ms - 500ms): Chỉ kích hoạt luồng phát khi người dùng ngừng nói hoặc câu phụ đề hoàn thành (Sentence Boundary Detection qua dấu chấm, phẩy, hỏi, than hoặc ngắt dòng).
+    2. **Dynamic Speech Rate Scaling & Anti-Backlog Queue**:
+       - Quản lý hàng đợi thích ứng: Khi số lượng câu trong hàng đợi vượt quá 1 câu, tự động tăng tốc độ đọc (`speechRate` từ 1.0x lên 1.25x - 1.5x) để bắt kịp nhịp video.
+       - Khi hàng đợi vượt quá ngưỡng giới hạn (ví dụ > 3 câu), tự động thực thi cơ chế xả tràn (`QUEUE_FLUSH`) để bỏ qua các câu quá cũ, ưu tiên tức thời phụ đề mới nhất.
+    3. **Audio Ducking via AudioFocus (`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`)**:
+       - Khi chuẩn bị phát âm phụ đề, yêu cầu `AudioManager` hạ âm lượng các ứng dụng phát nền (YouTube, TikTok, Netflix...) xuống mức ducking (~20-30%).
+       - Khi TTS phát xong qua callback `UtteranceProgressListener.onDone` hoặc `CountDownLatch.countDown`, giải phóng audio focus để âm lượng video trở lại bình thường.
+    4. **In-place Accessibility Bypass & Target App Whitelisting**:
+       - Không giới hạn cứng gói ứng dụng; cho phép đọc phụ đề linh hoạt trên mọi ứng dụng (YouTube, TikTok, MX Player...) bằng cách loại trừ các gói nội bộ (`vn.smartdubbing.live`, `com.android.systemui`, `com.android.settings`) thay vì chặn tất cả app ngoài.
+*   **Độ khả thi trong `_patchx`**: **100% Khả thi**. Có thể cấu trúc thành module `patchx_core/subtitle_tts_engine.py` và tạo các bản vá Smali trực tiếp cho `SubtitleAccessibilityService`, `AudioCaptureService` và `MainActivity`.
+
 ---
 
 ## 4. BẢN ĐỒ KẾ THỪA VÀO CÁC MODULE TOOLKIT `_patchx`
@@ -222,13 +242,17 @@ Tài liệu lưu trữ tập trung các kỹ thuật, kinh nghiệm và giải p
  - RevenueCat isActive true   - Protobuf Inspector      - In-place JSON/XML Assets
  - Billing v7 Return OK       - Device ID Rotator Hook  - Fast-Repack Zero Copy
  - Device ID Spoof Macro      - GeoIP/AB Header Spoof   - Fail-Open Route Tamper
-                              - Client-Server Trust Map - NSC SSL Pinning Bypass
+ - Subtitle Realtime Reader   - Subtitle Stream Engine  - NSC SSL Pinning Bypass
 ```
 
 ---
 
 ## 5. NHẬT KÝ HỌC HỎI & CẬP NHẬT KINH NGHIỆM (AUDIT LOG)
 
+*   **2026-09-03 (Phiên nghiên cứu & tích hợp chức năng Đọc phụ đề thời gian thực bằng TTS)**:
+    - Phân tích sâu các kỹ thuật từ các dự án mã nguồn mở Android hàng đầu (InstantVoiceTranslate, LiveCaptionN, Maise, Chiara-Select2Speak).
+    - Đánh giá và chắt lọc 4 cơ chế cốt lõi: Bộ gom cụm & khử trùng lặp cửa sổ trượt (Sliding Window Dedup), Điều tốc động & xả tràn hàng đợi chống trễ (Dynamic Speech Rate Scaling), Hạ âm lượng nền (Audio Ducking qua `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`), và Mở rộng Accessibility đọc phụ đề đa ứng dụng.
+    - Bổ sung Kinh nghiệm 15 vào kho tri thức, thiết kế module `subtitle_tts_engine.py` cho toolkit `_patchx`.
 *   **2026-09-03 (Phiên mở rộng cấu hình cục bộ & đồng bộ chứng chỉ an toàn)**:
     - Bổ sung Kinh nghiệm 13 (Mô phỏng SharedPreferences / Datastore cục bộ đảm bảo ứng dụng hoạt động mượt mà ngoại tuyến) và Kinh nghiệm 14 (Cấu hình chứng chỉ tin cậy phục vụ kiểm toán an toàn trong sandbox).
 *   **2026-09-03 (Phiên phân tích ranh giới niềm tin Client-Server & Bắt gói tin giải mã)**:

@@ -465,11 +465,10 @@ def cmd_install_deps(args):
     return 0 if ok else 1
 
 
-def _pipeline_steps(inp, out):
-    """Trả danh sách (tên, args) cho quy trình toàn bộ patch."""
-    return [
+def _pipeline_steps(inp, out, include_tests=False, include_sim=False):
+    """Trả danh sách (tên, args) cho quy trình toàn bộ patch tinh gọn chuẩn hóa."""
+    steps = [
         ("selfcheck đầu vào", ["selfcheck", inp]),
-        ("kiểm thử tự động", ["test"]),
         ("quét tóm tắt", ["scan", inp, "-o",
                           os.path.join(out, "scan.json")]),
         ("phát hiện trùng lặp", ["dupes", inp, "-o",
@@ -487,11 +486,14 @@ def _pipeline_steps(inp, out):
         ("gộp combo tự phát hiện", ["combo", os.path.join(out, "upgraded"),
                                     "--auto", "-o",
                                     os.path.join(out, "combos")]),
-        ("mô phỏng toàn diện", ["simulate", os.path.join(out, "upgraded"),
-                                "-o", out]),
         ("báo cáo HTML", ["report", os.path.join(out, "upgraded"),
                           "-o", os.path.join(out, "report.html")]),
     ]
+    if include_tests:
+        steps.insert(1, ("kiểm thử tự động (yêu cầu rõ ràng từ User)", ["test"]))
+    if include_sim:
+        steps.insert(-1, ("mô phỏng toàn diện (yêu cầu rõ ràng từ User)", ["simulate", os.path.join(out, "upgraded"), "-o", out]))
+    return steps
 
 
 def _write_summary(inp, out, results, started):
@@ -539,19 +541,28 @@ def _write_summary(inp, out, results, started):
 
 
 def cmd_run(args):
-    inp = os.path.abspath(args.input)
+    inp = getattr(args, "artifact", None) or args.input
+    inp = os.path.abspath(inp)
     out = os.path.abspath(args.output)
     os.makedirs(out, exist_ok=True)
-    _log("Bắt đầu quy trình toàn bộ patch.")
+
+    # Nếu inp là file Android artifact (.apk, .apks, .aab): Chuyển sang Unified Pipeline hiện đại!
+    ext = os.path.splitext(inp)[1].lower()
+    if ext in (".apk", ".apks", ".aab") or (os.path.isfile(inp) and zipfile.is_zipfile(inp) and not inp.endswith(".zip")):
+        _log("Phát hiện Android artifact (%s) -> Kích hoạt Unified Pipeline hiện đại." % os.path.basename(inp))
+        from patchx_core.pipeline_unified import UnifiedPipeline
+        pipeline = UnifiedPipeline(inp, output_dir=out)
+        res = pipeline.run(mode="auto")
+        _log("Hoàn thành: %s (%s s)" % (res.get("verdict"), res.get("elapsed_seconds")))
+        return 0 if res.get("verdict") == "SUCCESS" else 1
+
+    _log("Bắt đầu quy trình toàn bộ patch tinh gọn.")
     _log("Đầu vào: %s" % inp)
     _log("Đầu ra: %s" % out)
     started = time.monotonic()
-    steps = _pipeline_steps(inp, out)
-    if args.quick:
-        steps = [s for s in steps if s[0] not in
-                 ("gộp combo tự phát hiện", "mô phỏng toàn diện")]
-        steps.append(("mô phỏng nhanh", ["simulate", inp, "-o", out,
-                                         "--quick"]))
+    with_tests = bool(getattr(args, "with_tests", False))
+    with_sim = bool(getattr(args, "simulate", False)) or (not getattr(args, "quick", False) and getattr(args, "simulate_all", False))
+    steps = _pipeline_steps(inp, out, include_tests=with_tests, include_sim=with_sim)
     results = []
     for idx, (name, argv) in enumerate(steps, 1):
         print("\n=== [%d/%d] %s ===" % (idx, len(steps), name))
@@ -2011,11 +2022,33 @@ def _write_full_report(out, report):
 
 
 def cmd_apk_full(args):
-    """Dây chuyền end-to-end: plan → apply → fix-res → build → sign → verify.
-
-    Có `--resume`: bỏ qua stage đã hoàn thành (plan/apply/build/runtime) khi
-    vân tay đầu vào không đổi — vòng lặp fix→test chỉ chạy phần thay đổi.
+    """Dây chuyền end-to-end tinh gọn:
+    Mặc định tự động kích hoạt Unified Pipeline (Fast-Path In-Place <0.5s + Taint Security Gates)
+    nếu nhận tệp APK/APKS/AAB, loại bỏ hoàn toàn nguy cơ lỗi aapt2 và sự phụ thuộc apktool chậm chạp.
+    Hỗ trợ --legacy nếu muốn ép chạy quy trình giải mã và apktool b truyền thống.
     """
+    # 1. Phát hiện artifact APK trực tiếp
+    target_apk = None
+    tree_arg = getattr(args, "tree", None)
+    if tree_arg and os.path.isfile(tree_arg):
+        ext = os.path.splitext(tree_arg)[1].lower()
+        if ext in (".apk", ".apks", ".aab"):
+            target_apk = tree_arg
+    if not target_apk and getattr(args, "input", None):
+        inp_ext = os.path.splitext(args.input)[1].lower()
+        if inp_ext in (".apk", ".apks", ".aab") and os.path.isfile(args.input):
+            target_apk = args.input
+
+    # Nếu có tệp APK và không bật cờ --legacy: Chạy Unified Fast-Path In-Place Repack (<0.5s)
+    if target_apk and not getattr(args, "legacy", False):
+        _log("Áp dụng Pipeline Tinh Gọn Hiện Đại: Fast-Path Zero-Copy (<0.5s) & Taint Security Gates.")
+        from patchx_core.pipeline_unified import UnifiedPipeline
+        out = os.path.abspath(args.output)
+        pipeline = UnifiedPipeline(target_apk, output_dir=out)
+        res = pipeline.run(mode="auto")
+        _log("Hoàn thành Pipeline: %s (%s s)" % (res.get("verdict"), res.get("elapsed_seconds")))
+        return 0 if res.get("verdict") == "SUCCESS" else 1
+
     auto = not getattr(args, "no_auto_install", False)
     if not _ensure_tools(["apktool", "java", "aapt2", "zipalign",
                           "apksigner"], auto):
@@ -3221,13 +3254,19 @@ def main(argv=None):
                    help="Thư mục patch đầu vào (mặc định _patchx/upgraded)")
     p.set_defaults(func=cmd_doctor)
 
-    p = sub.add_parser("run", help="Chạy toàn bộ quy trình thông minh")
+    p = sub.add_parser("run", help="Chạy quy trình tự động tinh gọn chuẩn hóa")
+    p.add_argument("artifact", nargs="?", default=None,
+                   help="Tệp APK/APKS/AAB hoặc thư mục patch (tự động nhận diện)")
     p.add_argument("--input", default=DEFAULT_INPUT,
                    help="Thư mục patch đầu vào")
     p.add_argument("--output", default=DEFAULT_OUT,
                    help="Thư mục đầu ra")
     p.add_argument("--quick", action="store_true",
-                   help="Chạy nhanh: bỏ combo và dùng simulate --quick")
+                   help="Chạy nhanh bỏ qua các bước nặng")
+    p.add_argument("--with-tests", action="store_true",
+                   help="Kích hoạt kiểm thử tự động (mặc định tắt theo quy tắc không tự ý test)")
+    p.add_argument("--simulate", action="store_true",
+                   help="Kích hoạt mô phỏng toàn diện")
     p.add_argument("--keep-going", action="store_true",
                    help="Tiếp tục chạy dù có bước lỗi")
     p.set_defaults(func=cmd_run)
@@ -3439,6 +3478,8 @@ def main(argv=None):
                    help="Số combo bổ trợ tối đa để tính điểm")
     p.add_argument("--dry-run", action="store_true",
                    help="Chỉ chạy tới bước Plan, không apply/build")
+    p.add_argument("--legacy", action="store_true",
+                   help="Ép buộc chạy quy trình apktool b truyền thống (dễ phát sinh lỗi aapt2)")
     p.add_argument("--no-build", action="store_true",
                    help="Bỏ qua build (chỉ plan + apply)")
     p.add_argument("--resume", action="store_true",

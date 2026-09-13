@@ -90,9 +90,12 @@ def status_date():
     try:
         with open(STATUS_FILE, encoding="utf-8") as fh:
             head = fh.read(600)
-        m = re.search(r"Ngày cập nhật:\s*\*\*(\d{4}-\d{2}-\d{2})", head)
+        m = re.search(r"Ngày cập nhật:\s*\*\*(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)", head)
         if m:
-            return datetime.strptime(m.group(1), "%Y-%m-%d")
+            val = m.group(1).strip()
+            if " " in val:
+                return datetime.strptime(val, "%Y-%m-%d %H:%M")
+            return datetime.strptime(val, "%Y-%m-%d")
     except Exception:
         pass
     return None

@@ -63,6 +63,20 @@ def main(argv=None):
 
     cmd = args[0].lower()
 
+    # Số trong danh mục là vị trí thật, 1-based.  Không tự chạy lệnh khi
+    # chưa có tham số để người dùng xem đúng trợ giúp của lệnh đã chọn.
+    if cmd.isdecimal():
+        from patchx_core.cli import command_at_position
+        position = int(cmd)
+        mapped_command = command_at_position(position)
+        if mapped_command is None:
+            print("[pushx] Số lệnh không hợp lệ: %s (chọn 01–68)." % args[0])
+            return 2
+        args[0] = mapped_command
+        cmd = mapped_command
+        if len(args) == 1:
+            args.append("--help")
+
     if cmd in ("docs", "doc", "huong-dan", "guide"):
         doc_path = os.path.join(BASE_DIR, "HUONG_DAN_LENH.md")
         if os.path.exists(doc_path):
@@ -74,6 +88,39 @@ def main(argv=None):
         print_banner()
         from patchx_core.cli import main as cli_main
         return cli_main(["--help"])
+
+    # 1. Chuyển tiếp thông minh cho quy trình APK hiện đại (thay thế pipeline apktool cũ)
+    if cmd == "apk-full":
+        if "--legacy" in args:
+            args.remove("--legacy")
+            try:
+                import patchx_toolkit
+                return patchx_toolkit.main(args)
+            except Exception as e:
+                print(f"[pushx] Chuyển tiếp toolkit gặp lỗi: {e}")
+                return 1
+        else:
+            target_art = None
+            for a in args[1:]:
+                if not a.startswith("-") and (a.lower().endswith((".apk", ".apks", ".xapk", ".aab")) or os.path.isfile(a)):
+                    target_art = a
+                    break
+            if target_art:
+                print("\033[1m\033[92m[pushx] Khởi chạy Pipeline Thống Nhất tối ưu (Fast-Path + Security Gates + Zero-Copy Repack)\033[0m")
+                print("\033[2m        (Gợi ý: Thêm cờ --legacy nếu muốn chạy lại qua quy trình apktool b / aapt2 cũ)\033[0m\n")
+                from patchx_core.cli import main as cli_main
+                return cli_main(["pipeline", target_art, "--mode", "auto"])
+
+    if cmd == "run":
+        target_art = None
+        for a in args[1:]:
+            if not a.startswith("-") and a.lower().endswith((".apk", ".apks", ".xapk", ".aab")):
+                target_art = a
+                break
+        if target_art:
+            print("\033[1m\033[92m[pushx] Phát hiện artifact APK — Kích hoạt Pipeline Thống Nhất tự động (mode: auto)\033[0m\n")
+            from patchx_core.cli import main as cli_main
+            return cli_main(["pipeline", target_art, "--mode", "auto"])
 
     # Xử lý các lệnh toolkit cổ điển nếu thuộc danh mục
     if cmd in TOOLKIT_COMMANDS:

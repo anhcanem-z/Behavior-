@@ -3495,6 +3495,35 @@ def test_terminal_ui_vietnamese():
           "rc=%s" % rc)
 
 
+def test_cli_danh_muc_so_thu_tu():
+    """Danh mục CLI phải đánh số liên tục và phủ đủ mọi lệnh thật."""
+    from patchx_core.cli import (C, COMMAND_GROUPS, GroupedArgumentParser,
+                                 command_at_position)
+    commands = [name for _, group in COMMAND_GROUPS for name, _ in group]
+    help_text = GroupedArgumentParser().format_help()
+    check("cli-danh-muc: đủ 68 lệnh độc nhất",
+          len(commands) == 68 and len(commands) == len(set(commands)),
+          "so_luong=%d" % len(commands))
+    check("cli-danh-muc: số khớp vị trí đầu/giữa/cuối",
+          command_at_position(1) == "intake"
+          and command_at_position(13) == "pipeline"
+          and command_at_position(32) == "frida"
+          and command_at_position(43) == "report"
+          and command_at_position(68) == "clean",
+          "01=%s, 13=%s, 32=%s, 43=%s, 68=%s" % (
+              command_at_position(1), command_at_position(13),
+              command_at_position(32), command_at_position(43),
+              command_at_position(68)))
+    check("cli-danh-muc: chặn số ngoài danh mục",
+          command_at_position(0) is None and command_at_position(69) is None,
+          "0=%s, 69=%s" % (command_at_position(0), command_at_position(69)))
+    check("cli-danh-muc: trợ giúp tách màu số/tên/mô tả",
+          "Số 01–68 là vị trí lệnh thật" in help_text
+          and "01." in help_text and "68." in help_text
+          and C.WHT in help_text and (C.DIM + "│ ") in help_text,
+          "ANSI + dải số")
+
+
 def test_res_attr_autofix():
     """Đợt G: auto-fix attribute res/*.xml mới hơn framework khi build
     (vd android:hyphenationFrequency enum [full=2, none=0, normal=1])."""
@@ -4642,6 +4671,38 @@ def test_unified_pipeline():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_blackboard_and_fused_targets():
+    from patchx_core.blackboard import SharedBlackboard, CapabilityCard
+    from patchx_core.fused_target_engine import fuse_analysis_targets, generate_fused_frida_script
+    bb = SharedBlackboard()
+    bb.post("artifact_path", "sample.apk")
+    check("blackboard: post & get fact", bb.get("artifact_path") == "sample.apk")
+    check("blackboard: default capabilities registered", bb.summary()["registered_capabilities"] >= 10)
+    fast_chain = bb.plan_chain_for_intent("fast")
+    check("blackboard: plan_chain_for_intent fast", any(c.name == "fast_patch" for c in fast_chain))
+
+    d = tempfile.mkdtemp(prefix="patchx_bb_", dir=TMP if os.path.isdir(TMP) else None)
+    try:
+        sf = os.path.join(d, "Sample.smali")
+        with open(sf, "w", encoding="utf-8") as fh:
+            fh.write("""
+.class public Lcom/demo/Test;
+.super Ljava/lang/Object;
+
+.method public static isVip()Z
+    .registers 1
+    const/4 v0, 0x1
+    return v0
+.end method
+""")
+        fused = fuse_analysis_targets(d)
+        check("fused_targets: phát hiện mục tiêu smali", fused["summary"]["total_fused"] >= 1)
+        js = generate_fused_frida_script(fused)
+        check("fused_targets: sinh Frida hook script", "Java.perform" in js)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     test_baseline()
     test_combo()
@@ -4727,6 +4788,7 @@ def main():
     test_extract_apk_cert_hex()
     test_plan_ui_render()
     test_terminal_ui_vietnamese()
+    test_cli_danh_muc_so_thu_tu()
     test_res_attr_autofix()
     test_pairip_bypass()
     test_behavior_aux_modules()
@@ -4734,6 +4796,7 @@ def main():
     test_session_selector()
     test_intake_capabilities()
     test_unified_pipeline()
+    test_blackboard_and_fused_targets()
     from tests.test_modder_hub_fastpath import run_all_modder_hub_tests
     run_all_modder_hub_tests(check)
     ok = sum(1 for _, c, _ in RESULTS if c)

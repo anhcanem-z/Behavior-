@@ -10,6 +10,13 @@ frida-termux-build/
 
 .codex/
 Apks/
+apk/
+lib/
+*.apk
+*.apks
+*.xapk
+*.aab
+a.txt
 libso/
 libso_clean/
 patchx_core/patchx_core/

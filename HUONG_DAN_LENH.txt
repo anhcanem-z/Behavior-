@@ -5,6 +5,14 @@ Cách chạy chung:
 
     python3 patchx <LỆNH> [TÙY CHỌN]
 
+Chọn lệnh theo số thứ tự thật (danh mục khi chạy `python3 pushx`):
+
+    python3 pushx 01                 # intake --help
+    python3 pushx 13 app.apk --mode auto  # pipeline app.apk --mode auto
+
+Các số chạy liên tục từ 01 đến 68, đúng thứ tự hiển thị. Tên lệnh có màu
+trắng đậm, mô tả có màu xám để dễ phân biệt trong terminal hỗ trợ ANSI.
+
 Lưu ý:
 - Tên lệnh và tên tùy chọn phải gõ đúng chữ không dấu.
 - Tham số CÂY_APK là thư mục APK đã giải mã bằng apktool.
@@ -31,6 +39,8 @@ Các lệnh trong file riêng:
 
     behavior
     targets
+    targets-fused
+    discover
     behavior-pipeline
     remote-map
     remote-patch
@@ -349,4 +359,24 @@ pipeline
        python3 patchx pipeline app.apk --mode fast --dex-str "old=new" --axml "old=new"
        python3 patchx pipeline app.apk --mode intake -o outputs/pipeline
        python3 patchx pipeline app.apk --mode native
+
+discover (alias: universal-discovery, deep-scan)
+   Phân tích thông minh toàn diện: Quét mọi tệp nhạy cảm (assets/cert/db/raw) & Khai phá từ điển động (Dynamic Lexicon) không giới hạn từ khóa:
+       python3 patchx discover app.apk
+       python3 patchx discover outputs/apk/apk-trees/a_src -o outputs/discovery
+
+subtitle-tts (alias: subtitle-reader, realtime-subtitles)
+   Động cơ điều phối & chẩn đoán đọc phụ đề thời gian thực bằng giọng nói TTS (Sliding Window Dedup, Dynamic Speed Scaling):
+       python3 patchx subtitle-tts
+       python3 patchx subtitle-tts outputs/apk/apk-trees/a_src
+
+auto-refresh (alias: auto-session, auto-reset-translation)
+   Tự động reset và bật lại dịch phụ đề + chia sẻ toàn màn hình sau mỗi 2 phút 40 giây (160s) chống ngắt kết nối:
+       python3 patchx auto-refresh
+       python3 patchx auto-refresh --interval 160 --package com.sota.aitranslatex
+       python3 patchx auto-refresh --device 100.64.170.99:5555 --root
+       python3 patchx auto-refresh --once --no-tts
+       ./tools/auto_reset.sh
+
+
 
