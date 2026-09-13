@@ -91,7 +91,7 @@ Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồn
 | APK đầu vào | **12 APK** trong Apks/ | 2026-09-03 |
 | Cây giải mã | **2 cây** trong outputs/apk/apk-trees/ (a_src, d_src) | 2026-09-03 |
 | Combo thành công | **49 lượt** trong `outputs/combos/combos_success.json` | 2026-09-03 |
-| Git | **đã init + push GitHub** — HEAD `c0522d6`, 26 commits trên `master` → đồng bộ remote | 2026-09-03 |
+| Git | **đã commit hoàn chỉnh** — HEAD `9fa5056`, 28 commits trên `master` | 2026-09-13 |
 | Bản phân phối | **3 bản** trong `dist/` (mới nhất: patchx-toolkit-5-20260903-021149.zip, 11.46 MB) | 2026-09-03 |
 
 ---
@@ -269,13 +269,16 @@ Ngày cập nhật: **2026-09-13 19:07 (Asia/Ho_Chi_Minh)** — Quét và đồn
 11. [x] **Tương thích Python 3.14+ trên Termux**: Xây dựng `safe_open_zip` vô hiệu hóa strict `_end_offset` bomb check, mở khóa đọc/ghi mọi APK modder có overlapped headers.
 12. [x] **Active Learning Smart-Combo Generator (`learn.py`)**: `analyze_success_patterns`, `generate_smart_combo`, `save_smart_combo`, lệnh CLI `patchx smart-combo` tự động tổng hợp patch dựa trên AST Smali và 16 bản ghi lịch sử thành công, 0 xung đột.
 13. [x] **Realtime SSE Live Log Streaming & WebUI Nâng Cấp (`webui/server.py`)**: Giao thức SSE `/api/stream-logs`, luồng phát `broadcast_log`, tab Smart Combo trên WebUI, cửa sổ Live Log Terminal trực quan.
-14. [x] **Kiểm thử & Đóng gói**: Test suite nâng lên **575/575 PASS (100%)**, 64 lệnh CLI đồng bộ.
+14. [x] **Kiểm thử & Đóng gói**: Test suite nâng lên **593/593 PASS (100%)**, 71 lệnh CLI đồng bộ.
+15. [x] **Real-Time Subtitle TTS Engine & Audio Automation (`subtitle_tts_engine.py`, `speak.py`)**: Lớp điều phối âm thanh Dalvik `CaptionTtsSpeaker`, Sliding Window Dedup, Dynamic Rate Scaling, Audio Ducking, đóng gói thành công `d_final_tts_signed.apk` (62.02 MB), script phát âm giọng nói Termux TTS `tools/speak.py`.
+16. [x] **Auto Session Refresher & WebSocket Anti-Disconnect (`auto_session_refresher.py`)**: Lệnh CLI số 71 `patchx auto-refresh`, tự động reset sau 160s, tự động duyệt MediaProjection toàn màn hình, script `tools/auto_session_reset.py` và `tools/auto_reset.sh`.
+17. [x] **Visual Control Flow Graph (CFG) trên WebUI (`webui/server.py`)**: Tab Visual CFG trực quan, tính toán Cyclomatic Complexity, phân tích rẽ nhánh điều kiện (True/False/Goto), khối Entry/Exit, tương thích 100% không cần CDN, hỗ trợ xuất biểu đồ Mermaid.
 
-### 1. CÁC NHIỆM VỤ ƯU TIÊN TIẾP THEO CẦN TRIỂN KHAI:
-1. **Visual Flow Graph (CFG) trên WebUI**:
-   - Trực quan hóa luồng phân tích Control Flow Graph (CFG) và các điểm rẽ nhánh của cây Smali dưới dạng đồ thị tương tác trên WebUI.
-2. **Đồng bộ Remote GitHub (`git push`)**:
-   - Đẩy các commit mới lên nhánh `master` của remote `anhcanem-z/Behavior-`.
+### 1. CÁC NHIỆM VỤ TIẾP THEO CẦN TRIỂN KHAI:
+1. **Đồng bộ Remote GitHub (`git push`)**:
+   - Cung cấp token xác thực GitHub (PAT) hoặc cấu hình SSH key để đẩy 27 commits lên nhánh `master` của remote `anhcanem-z/Behavior-`.
+2. **Dọn dẹp tài nguyên nặng khi cần thiết**:
+   - Quyết định lưu trữ/xóa các file APK gốc cũ trong `Apks/` để tối ưu dung lượng bộ nhớ thiết bị.
 
 ---
 
