@@ -57,25 +57,48 @@ def _slug(text: str) -> str:
 
 
 def collect_new(report: Dict[str, Any]) -> Dict[str, Any]:
-    """Gom behavior.id + category lạ từ report quét."""
+    """Gom behavior.id + category + tags lạ từ report quét."""
     known = _known_ids()
     found: Dict[str, Dict[str, Any]] = {}
 
     def visit(finding: Dict[str, Any]) -> None:
-        for key, kind in (("behavior", "behavior"), ("category", "category")):
-            val = finding.get(key)
-            if not isinstance(val, dict):
-                continue
-            bid = val.get("id") or finding.get("category")
-            if not bid or bid in known:
-                continue
-            entry = found.setdefault(bid, {
-                "id": bid, "kind": kind,
-                "label": val.get("label") or bid,
+        # 1. Behavior object
+        val = finding.get("behavior")
+        if isinstance(val, dict):
+            bid = val.get("id")
+            if bid and bid not in known:
+                entry = found.setdefault(bid, {
+                    "id": bid, "kind": "behavior",
+                    "label": val.get("label") or bid,
+                    "first_seen": time.strftime("%Y-%m-%d %H:%M"),
+                    "sources": [],
+                })
+                if source_name not in entry["sources"]:
+                    entry["sources"].append(source_name)
+
+        # 2. Behavior_extra tags
+        for extra in finding.get("behavior_extra", []):
+            if isinstance(extra, str) and extra and extra not in known:
+                entry = found.setdefault(extra, {
+                    "id": extra, "kind": "behavior_tag",
+                    "label": extra.replace("_", " ").title(),
+                    "first_seen": time.strftime("%Y-%m-%d %H:%M"),
+                    "sources": [],
+                })
+                if source_name not in entry["sources"]:
+                    entry["sources"].append(source_name)
+
+        # 3. Category nếu chưa có trong known
+        cat = finding.get("category")
+        if isinstance(cat, str) and cat and cat not in known and cat not in ("log", "comment", "sample", "symbol", "library"):
+            entry = found.setdefault(cat, {
+                "id": cat, "kind": "category",
+                "label": cat.replace("_", " ").title(),
                 "first_seen": time.strftime("%Y-%m-%d %H:%M"),
                 "sources": [],
             })
-            entry["sources"].append(source_name)
+            if source_name not in entry["sources"]:
+                entry["sources"].append(source_name)
 
     source_name = None
     if isinstance(report.get("repro"), dict):
@@ -98,9 +121,12 @@ def learn_from_report(report: Dict[str, Any],
                       source: str | None = None) -> Dict[str, Any]:
     """Rà report, ghi hành vi mới vào kho (nếu có) — trả dict mới phát hiện."""
     new = collect_new(report)
+    os.makedirs(DISCOVERED_DIR, exist_ok=True)
+    if not os.path.isfile(DISCOVERED_MAIN):
+        with open(DISCOVERED_MAIN, "w", encoding="utf-8") as fh:
+            json.dump({}, fh, ensure_ascii=False, indent=2)
     if not new:
         return {}
-    os.makedirs(DISCOVERED_DIR, exist_ok=True)
     main = _load_main()
     for bid, entry in new.items():
         if bid in main:

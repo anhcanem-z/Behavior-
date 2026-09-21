@@ -118,12 +118,56 @@ def fast_repack_apk(apk_in_path, updates_map, apk_out_path=None, strip_signature
     }
 
 
+def sign_repacked_apk(apk_path, keystore=None, ks_pass="android"):
+    """Ký số và zipalign APK sau khi repack in-place."""
+    from pathlib import Path
+    apksigner = shutil.which("apksigner")
+    zipalign = shutil.which("zipalign")
+
+    if zipalign:
+        aligned = apk_path + ".aligned.tmp"
+        res = subprocess.run([zipalign, "-p", "-f", "4", apk_path, aligned],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            shutil.move(aligned, apk_path)
+        elif os.path.exists(aligned):
+            try:
+                os.remove(aligned)
+            except OSError:
+                pass
+
+    if not apksigner:
+        return {"signed": False, "error": "Không tìm thấy apksigner"}
+
+    ks = keystore
+    if not ks or not os.path.isfile(ks):
+        from .behavior.gadget_pipeline import _ensure_keystore
+        out_dir = Path(os.path.dirname(os.path.abspath(apk_path)))
+        ks = str(_ensure_keystore(out_dir, ks_pass))
+
+    cmd = [
+        apksigner, "sign",
+        "--ks", str(ks),
+        "--ks-pass", f"pass:{ks_pass}",
+        "--key-pass", f"pass:{ks_pass}",
+        "--ks-key-alias", "patchx",
+        apk_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    return {
+        "signed": proc.returncode == 0,
+        "error": proc.stderr if proc.returncode != 0 else None,
+    }
+
+
 def fast_patch_and_repack(apk_path, dex_replacements=None, axml_replacements=None,
                           arsc_replacements=None, output_apk=None, strip_signatures=True,
-                          allow_empty=False):
-    """Quy trình Fast-Patch tích hợp khép kín:
+                          allow_empty=False, bypass_nsc=False, sign=False,
+                          keystore=None, ks_pass="android"):
+    """Quy trình Fast-Patch tích hợp khép kín (Zero-Decompile in-memory):
 
-    Đọc APK -> can thiệp in-place classes.dex, AndroidManifest.xml, resources.arsc -> repack siêu tốc.
+    Đọc APK -> can thiệp in-place classes.dex, AndroidManifest.xml, resources.arsc,
+    vô hiệu hóa Network Security Config và ký số trực tiếp -> repack siêu tốc <0.5s.
     """
     if not os.path.isfile(apk_path):
         raise FileNotFoundError("Không tìm thấy APK: %s" % apk_path)
@@ -156,26 +200,49 @@ def fast_patch_and_repack(apk_path, dex_replacements=None, axml_replacements=Non
                         updates[item] = curr_data
                         total_dex_hits += file_hits
 
-        # Xử lý AndroidManifest.xml
-        if axml_replacements and "AndroidManifest.xml" in namelist:
+        # Xử lý AndroidManifest.xml & bypass NSC
+        if (axml_replacements or bypass_nsc) and "AndroidManifest.xml" in namelist:
             xml_data = zin.read("AndroidManifest.xml")
             curr_xml = xml_data
             xml_hits = 0
-            for rep in axml_replacements:
-                old_val, new_val = rep[0], rep[1]
-                # Thử UTF-8
-                u8_old, u8_new = old_val.encode("utf-8"), new_val.encode("utf-8")
-                if u8_old in curr_xml and len(u8_new) <= len(u8_old):
-                    cnt = curr_xml.count(u8_old)
-                    curr_xml = curr_xml.replace(u8_old, u8_new + b"\x00" * (len(u8_old) - len(u8_new)))
-                    xml_hits += cnt
-                # Thử UTF-16LE
-                u16_old, u16_new = old_val.encode("utf-16le"), new_val.encode("utf-16le")
-                if u16_old in curr_xml and len(u16_new) <= len(u16_old):
-                    cnt = curr_xml.count(u16_old)
-                    curr_xml = curr_xml.replace(u16_old, u16_new + b"\x00" * (len(u16_old) - len(u16_new)))
-                    xml_hits += cnt
-            if xml_hits > 0:
+            if axml_replacements:
+                for rep in axml_replacements:
+                    old_val, new_val = rep[0], rep[1]
+                    # Thử UTF-8
+                    u8_old, u8_new = old_val.encode("utf-8"), new_val.encode("utf-8")
+                    if u8_old in curr_xml and len(u8_new) <= len(u8_old):
+                        cnt = curr_xml.count(u8_old)
+                        curr_xml = curr_xml.replace(u8_old, u8_new + b"\x00" * (len(u8_old) - len(u8_new)))
+                        xml_hits += cnt
+                    # Thử UTF-16LE
+                    u16_old, u16_new = old_val.encode("utf-16le"), new_val.encode("utf-16le")
+                    if u16_old in curr_xml and len(u16_new) <= len(u16_old):
+                        cnt = curr_xml.count(u16_old)
+                        curr_xml = curr_xml.replace(u16_old, u16_new + b"\x00" * (len(u16_old) - len(u16_new)))
+                        xml_hits += cnt
+            if bypass_nsc:
+                # Vô hiệu hóa Network Security Config trong AXML
+                if b"networkSecurityConfig" in curr_xml:
+                    curr_xml = curr_xml.replace(b"networkSecurityConfig", b"disabledSecConfig")
+                    xml_hits += 1
+                nsc_u16 = "networkSecurityConfig".encode("utf-16le")
+                dis_u16 = "disabledSecConfig".encode("utf-16le")
+                if nsc_u16 in curr_xml:
+                    curr_xml = curr_xml.replace(nsc_u16, dis_u16)
+                    xml_hits += 1
+                # Bơm file cấu hình mạng mở
+                updates["res/xml/network_security_config.xml"] = (
+                    b'<?xml version="1.0" encoding="utf-8"?>\n'
+                    b'<network-security-config>\n'
+                    b'    <base-config cleartextTrafficPermitted="true">\n'
+                    b'        <trust-anchors>\n'
+                    b'            <certificates src="system" />\n'
+                    b'            <certificates src="user" />\n'
+                    b'        </trust-anchors>\n'
+                    b'    </base-config>\n'
+                    b'</network-security-config>\n'
+                )
+            if xml_hits > 0 or bypass_nsc:
                 updates["AndroidManifest.xml"] = curr_xml
                 total_axml_hits += xml_hits
 
@@ -217,4 +284,10 @@ def fast_patch_and_repack(apk_path, dex_replacements=None, axml_replacements=Non
     repack_info["axml_hits"] = total_axml_hits
     repack_info["arsc_hits"] = total_arsc_hits
     repack_info["success"] = True
+
+    if sign:
+        sign_res = sign_repacked_apk(repack_info["apk_out"], keystore=keystore, ks_pass=ks_pass)
+        repack_info["signed"] = sign_res.get("signed", False)
+        repack_info["sign_error"] = sign_res.get("error")
+
     return repack_info

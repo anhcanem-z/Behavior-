@@ -27,4 +27,10 @@ scratch/
 temp_apk/
 temp_old_apk/
 temp_*.smali
-
+.backup/
+.backup_*/
+*.tar.gz
+*.zip
+tmp/
+*.bak.*
+tools/external/

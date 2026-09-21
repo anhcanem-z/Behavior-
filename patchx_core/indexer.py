@@ -45,8 +45,26 @@ def patch_sha256(z):
     return h.hexdigest()
 
 
-def scan_dir(root, recursive=False):
+def scan_dir(root, recursive=False, use_cache=True):
     """Quet tat ca .zip trong thu mức, tra ve danh sach ban ghi."""
+    cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "cache")
+    cache_key = hashlib.md5(f"{os.path.abspath(root)}:{recursive}".encode()).hexdigest()[:12]
+    cache_file = os.path.join(cache_dir, f"scan_{cache_key}.json")
+    cur_mtime = None
+    cur_count = None
+    if use_cache:
+        try:
+            cur_mtime = os.path.getmtime(root)
+            cur_count = len(os.listdir(root))
+            if os.path.isfile(cache_file):
+                with open(cache_file, "r", encoding="utf-8") as fh:
+                    cached = json.load(fh)
+                    if cached.get("mtime") == cur_mtime and cached.get("count") == cur_count:
+                        return cached["records"]
+        except Exception:
+            pass
+
+
     records = []
     zips = list(_iter_zips(root, recursive=recursive))
     shas = {z: patch_sha256(z) for z in zips}
@@ -90,6 +108,13 @@ def scan_dir(root, recursive=False):
             rec["parse_error"] = str(e)
             rec["issues"] = [str(e)]
         records.append(rec)
+    if cur_mtime is not None:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as fh:
+                json.dump({"mtime": cur_mtime, "count": cur_count, "records": records}, fh, ensure_ascii=False)
+        except Exception:
+            pass
     return records
 
 

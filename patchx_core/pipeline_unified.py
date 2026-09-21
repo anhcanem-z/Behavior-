@@ -434,8 +434,62 @@ class UnifiedPipeline:
             fh.write("\n".join(lines) + "\n")
         report["outputs"]["report_markdown"] = mpath
 
+    def run_dag(self, pipeline_name: str = "auto", **kwargs) -> Dict[str, Any]:
+        """Thực thi pipeline thông qua DAG Dependency Engine."""
+        from .pipeline_registry import get_pipeline_registry
+        registry = get_pipeline_registry()
+        pipe_def = registry.get_pipeline(pipeline_name)
+        if pipe_def is None:
+            raise ValueError(f"Không tìm thấy pipeline '{pipeline_name}' trong Registry. Các pipeline sẵn có: {[p.name for p in registry.list_pipelines()]}")
+
+        dag_res = pipe_def.execute(
+            artifact_path=self.artifact,
+            output_dir=self.output_dir,
+            context_overrides=kwargs,
+            blackboard=self.blackboard,
+            stop_on_fail=kwargs.get("stop_on_fail", True),
+            dry_run=kwargs.get("dry_run", False),
+        )
+
+        # Chuyển đổi DAGExecutionResult sang schema báo cáo thống nhất
+        report: Dict[str, Any] = {
+            "schema": SCHEMA,
+            "artifact": {
+                "path": self.artifact,
+                "name": os.path.basename(self.artifact),
+                "size": os.path.getsize(self.artifact) if os.path.exists(self.artifact) else 0,
+            },
+            "mode": f"dag:{pipeline_name}",
+            "started_at": dag_res.started_at_str,
+            "finished_at": dag_res.finished_at_str,
+            "elapsed_seconds": dag_res.elapsed_seconds,
+            "verdict": dag_res.verdict,
+            "stages": [
+                {
+                    "name": rec.name,
+                    "status": "PASS" if rec.status == "SUCCESS" else ("SKIP" if rec.status == "SKIPPED" else ("WARN" if rec.status == "WARN" else "FAIL")),
+                    "elapsed_seconds": rec.elapsed_seconds,
+                    "details": rec.output_data or rec.skip_reason or rec.error_message or "OK",
+                }
+                for rec in dag_res.records.values()
+            ],
+            "outputs": dict(dag_res.context),
+            "dag_details": dag_res.to_dict(),
+        }
+        self._write_reports(report)
+        return report
+
 
 def run_pipeline(artifact_path: str, mode: str = "auto", output_dir: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     """Hàm giao tiếp chính cho CLI và các orchestrator."""
     pipeline = UnifiedPipeline(artifact_path, output_dir=output_dir)
+    if mode.startswith("dag:"):
+        p_name = mode.split(":", 1)[1]
+        return pipeline.run_dag(pipeline_name=p_name, **kwargs)
     return pipeline.run(mode=mode, **kwargs)
+
+
+def run_dag_pipeline(artifact_path: str, pipeline_name: str = "auto", output_dir: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    """Khởi chạy trực tiếp pipeline qua DAG engine."""
+    pipeline = UnifiedPipeline(artifact_path, output_dir=output_dir)
+    return pipeline.run_dag(pipeline_name=pipeline_name, **kwargs)

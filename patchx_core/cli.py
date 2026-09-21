@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Giao diện dòng lệnh của patchx — toàn bộ thông báo bằng tiếng Việt."""
+from .smali_validate import smali_files
+
 
 import argparse
 import glob
@@ -12,19 +14,10 @@ import zipfile
 
 from . import __version__
 from .parser import parse_patch_file
-from .engine import Engine
-from .audit import (audit_patch, parse_nested_zip, upgrade_zip,
-                    LEVEL_ERROR, LEVEL_WARN)
-from .indexer import scan_dir, write_index, render_report
-from .optimizer import (cluster_tag, find_conflicts, merge_patches,
-                        render_patch_text)
-
-# Behavior analysis stack — dong bo voi CFG / ontology / target / Frida.
-from .behavior.detector import BehaviorDetector
+from .audit import LEVEL_ERROR, LEVEL_WARN
 from .behavior.flows import (available_flows, flow_alias_for_behavior,
                             get_flow_definition, normalize_flow_name)
 from .behavior.ontology import BEHAVIORS
-from .behavior.target import TargetAnalyzer
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -51,6 +44,7 @@ def _load_patches(root, recursive=False):
     """Nạp mọi patch (zip) trong thư mục; xử lý zip lồng nhau."""
     patches = []
     from .indexer import _iter_zips
+    from .audit import parse_nested_zip
     for z in _iter_zips(root, recursive=recursive):
         try:
             patches.append(parse_patch_file(z))
@@ -62,6 +56,7 @@ def _load_patches(root, recursive=False):
 
 
 def cmd_scan(args):
+    from .indexer import scan_dir
     records = scan_dir(args.thu_muc, recursive=args.recursive)
     dupes = [r for r in records if r.get("dupe_id")]
     if dupes:
@@ -85,6 +80,7 @@ def cmd_scan(args):
 
 
 def cmd_index(args):
+    from .indexer import write_index
     out = args.o or os.path.join(BASE_DIR, "outputs", "scan")
     ip, rp = write_index(args.thu_muc, out, name=args.ten,
                          recursive=args.recursive)
@@ -177,7 +173,7 @@ def cmd_verify_manifest(args):
         return 1
     old = json.load(open(mpath, encoding="utf-8"))
     old_files = old.get("files", {})
-    records = scan_dir(root, recursive=True)
+    records = scan_dir(root, recursive=True, use_cache=False)
     cur = {r["path"]: r["sha256"] for r in records}
     added = sorted(set(cur) - set(old_files))
     removed = sorted(set(old_files) - set(cur))
@@ -547,6 +543,7 @@ def cmd_apk_prepare(args):
 
 
 def cmd_audit(args):
+    from .audit import audit_patch
     patches = _load_patches(args.thu_muc, recursive=args.recursive)
     out = []
     lines = ["# Báo cáo kiểm tra kiến trúc patch", "",
@@ -590,6 +587,7 @@ def cmd_audit(args):
 
 
 def cmd_upgrade(args):
+    from .audit import upgrade_zip
     out_dir = args.o or os.path.join(args.thu_muc, "_patchx", "upgraded")
     header = ("Ban nang cap boi patchx %s — chuan hoa kien truc, "
               "noi dung giu nguyen goc" % __version__)
@@ -618,6 +616,7 @@ def cmd_upgrade(args):
 
 
 def _components(patches):
+    from .optimizer import find_conflicts
     conflicts = find_conflicts(patches)
     conf_sets = [set(c["patches"]) for c in conflicts]
 
@@ -642,7 +641,7 @@ def _components(patches):
 
 
 def cmd_optimize(args):
-    from .optimizer import target_similarity
+    from .optimizer import target_similarity, cluster_tag, merge_patches, render_patch_text, find_conflicts
     patches = _load_patches(args.thu_muc)
     by_tag = {}
     for p in patches:
@@ -738,6 +737,13 @@ def cmd_optimize(args):
 
 
 def cmd_apply(args):
+    if getattr(args, "dag", False):
+        from .pipeline_registry import get_pipeline_registry
+        reg = get_pipeline_registry()
+        res = reg.run_pipeline("auto", args.cay_apk)
+        return 0 if res.success else 1
+
+    from .engine import Engine
     patches = [parse_patch_file(p) for p in args.patch]
     engine = Engine(args.cay_apk, dry_run=args.dry_run, backup=not args.no_backup,
                     force=args.force, no_dex=not args.dex_runner,
@@ -748,6 +754,25 @@ def cmd_apply(args):
         print("[patchx] Áp patch: %s" % p.name)
         engine.apply(p)
     engine.finalize()
+
+    if not args.dry_run and not engine.errors:
+        try:
+            from .learn import record_success, categorize
+            pkg = engine.package or os.path.basename(os.path.abspath(args.cay_apk))
+            record_success(
+                BASE_DIR,
+                {
+                    "package": pkg,
+                    "danh_mục": categorize(pkg),
+                    "combo": [p.name for p in patches],
+                    "target_tree": args.cay_apk,
+                    "applied_count": len(patches),
+                }
+            )
+            print("[patchx] Đã tự động cập nhật tri thức thành công vào kho combos_success.json")
+        except Exception:
+            pass
+
     if engine.errors and args.strict:
         return 1
     return 0
@@ -922,6 +947,100 @@ def cmd_pipeline(args):
     return 0 if report["verdict"] in ("SUCCESS", "READY") else 1
 
 
+def cmd_dag(args):
+    """Quản lý sơ đồ điều phối thứ tự công việc và sổ bộ quy trình mẫu."""
+    from .pipeline_registry import get_pipeline_registry
+    from .orchestrator import ensure_autopilot_pipeline
+    ensure_autopilot_pipeline()
+    registry = get_pipeline_registry()
+
+    if getattr(args, "list", False):
+        print("\n=== SỔ BỘ QUY TRÌNH — DANH SÁCH CÁC QUY TRÌNH MẪU ĐÃ CHUẨN HÓA ===")
+        for pipe in registry.list_pipelines():
+            dag = pipe.dag
+            order = dag.toposort() if dag.nodes else []
+            tags_str = f" [{', '.join(pipe.tags)}]" if pipe.tags else ""
+            print(f"  • \033[1m\033[96m{pipe.name}\033[0m{tags_str}: {pipe.description}")
+            print(f"    Sơ đồ luồng: {' -> '.join(order)} ({len(dag.nodes)} bước, {len(dag.get_execution_levels())} tầng thực hiện)")
+
+        print("\n=== CÁC BƯỚC XỬ LÝ (STEPS) KHẢ DỤNG ===")
+        for step in registry.list_steps():
+            cost_color = "\033[92m" if step.cost == "FAST" else ("\033[93m" if step.cost == "MEDIUM" else "\033[91m")
+            deps = f" (phụ thuộc bước: {', '.join(sorted(step.depends_on))})" if step.depends_on else ""
+            print(f"  [{cost_color}{step.cost}\033[0m] \033[1m{step.name}\033[0m{deps}: {step.description}")
+        return 0
+
+    if getattr(args, "inspect", None):
+        target = args.inspect
+        pipe = registry.get_pipeline(target)
+        if not pipe:
+            print(f"[dag] Lỗi: Không tìm thấy quy trình '{target}'. Dùng --list để xem danh sách.")
+            return 1
+        print(f"\n=== CHI TIẾT SƠ ĐỒ QUY TRÌNH: {pipe.name} (v{pipe.version}) ===")
+        print(f"Mô tả: {pipe.description}")
+        print(f"Tác giả: {pipe.author} | Thẻ phân loại: {', '.join(pipe.tags)}")
+        print("\n" + pipe.dag.render_ascii())
+        print("\n[Chi tiết từng bước xử lý]")
+        for name in pipe.dag.toposort():
+            node = pipe.dag.get_node(name)
+            print(f"  • {name} [{node.cost}]: {node.description}")
+            if node.inputs:
+                print(f"    - Dữ liệu đầu vào cần có: {', '.join(node.inputs)}")
+            if node.outputs:
+                print(f"    - Dữ liệu đầu ra sinh ra: {', '.join(node.outputs)}")
+        return 0
+
+    if getattr(args, "mermaid", None):
+        target = args.mermaid
+        pipe = registry.get_pipeline(target)
+        if not pipe:
+            print(f"[dag] Lỗi: Không tìm thấy quy trình '{target}'.")
+            return 1
+        print("```mermaid")
+        print(pipe.dag.to_mermaid())
+        print("```")
+        return 0
+
+    if getattr(args, "run", None):
+        pipe_name = args.run
+        if not getattr(args, "artifact", None):
+            print("[dag] Lỗi: Cần cung cấp đường dẫn tệp ứng dụng khi chạy --run <tên_quy_trình> <tệp_ứng_dụng>.")
+            return 1
+        pipe = registry.get_pipeline(pipe_name)
+        if not pipe:
+            print(f"[dag] Lỗi: Quy trình '{pipe_name}' không tồn tại trong Sổ bộ.")
+            return 1
+        print(f"[dag] Khởi chạy quy trình '{pipe_name}' cho tệp: {args.artifact}")
+        res = pipe.execute(
+            args.artifact,
+            output_dir=getattr(args, "output_dir", None),
+            dry_run=getattr(args, "dry_run", False),
+        )
+        print(f"[dag] Trạng thái chung: {res.verdict} ({round(res.elapsed_seconds, 3)} giây)")
+        for name, rec in res.records.items():
+            st_color = "\033[92mTHÀNH CÔNG\033[0m" if rec.status == "SUCCESS" else ("\033[93mBỎ QUA\033[0m" if rec.status == "SKIPPED" else "\033[91mTHẤT BẠI\033[0m")
+            dur = f"({round(rec.elapsed_seconds, 3)}s)" if rec.elapsed_seconds > 0 else ""
+            print(f"  [{st_color}] {name} {dur}")
+            if rec.error_message:
+                print(f"         Lỗi: {rec.error_message}")
+            if rec.skip_reason:
+                print(f"         Lý do bỏ qua: {rec.skip_reason}")
+        return 0 if res.verdict in ("SUCCESS", "PARTIAL", "DRY_RUN") else 1
+
+    if getattr(args, "export_all", None) or getattr(args, "export", None):
+        target_dir = args.export_all or args.export or os.path.join(BASE_DIR, "outputs", "pipeline", "dag")
+        exported = registry.export_blueprint(target_dir)
+        print(f"[dag] Đã xuất toàn bộ tài liệu và sơ đồ thành công vào: {target_dir}")
+        print(f"  • Cấu trúc tổng thể (JSON): {exported.get('schema_json')}")
+        print(f"  • Sơ đồ tổng thể (Markdown): {exported.get('blueprint_md')}")
+        pipes_count = len([k for k in exported if k.endswith('_mermaid')])
+        print(f"  • Số quy trình đã xuất: {pipes_count} quy trình")
+        return 0
+
+    print("[dag] Vui lòng chọn một tùy chọn: --list, --inspect <tên>, --mermaid <tên>, --export-all, hoặc --run <tên> <tệp_ứng_dụng>")
+    return 0
+
+
 def cmd_macro_list(args):
     from .macro_registry import list_macros, validate_macro
     for name in list_macros():
@@ -1050,6 +1169,12 @@ def cmd_fast_patch(args):
         print("[fast-patch] Cần ít nhất một --dex-str, --dex-hex, --axml hoặc --arsc")
         return 2
 
+    if getattr(args, "dag", False):
+        from .pipeline_registry import get_pipeline_registry
+        reg = get_pipeline_registry()
+        res = reg.run_pipeline("fast", args.apk)
+        return 0 if res.success else 1
+
     strip = not getattr(args, "no_strip", False)
     try:
         res = fast_patch_and_repack(
@@ -1065,10 +1190,113 @@ def cmd_fast_patch(args):
             return 1
         print("[fast-patch] THÀNH CÔNG: DEX hits=%d, AXML hits=%d, ARSC hits=%d, stripped=%d, file ra: %s (%d bytes)" %
               (res["dex_hits"], res["axml_hits"], res.get("arsc_hits", 0), res["stripped_signatures"], res["apk_out"], res["out_size"]))
+        try:
+            from .learn import record_success, categorize
+            pkg = os.path.basename(args.apk)
+            record_success(
+                BASE_DIR,
+                {
+                    "package": pkg,
+                    "danh_mục": categorize(pkg),
+                    "combo": ["fast-patch-inplace"],
+                    "target_apk": args.apk,
+                    "dex_hits": res.get("dex_hits", 0),
+                    "axml_hits": res.get("axml_hits", 0),
+                }
+            )
+        except Exception:
+            pass
         return 0
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         print("[fast-patch] LỖI: %s" % exc)
         return 2
+
+
+def cmd_auto_gate(args):
+    """Tự động can thiệp các cổng kiểm tra an ninh (Security Gates) bằng Smali AST Mutator và Micro-DEX Emulator."""
+    from .auto_gate_patcher import apply_security_gates
+    from .smali_sem import detect_security_gates
+
+    tree = args.tree
+    min_conf = getattr(args, "min_confidence", 75.0)
+    max_gates = getattr(args, "max_gates", 50)
+    backup = not getattr(args, "no_backup", False)
+
+    print(f"[auto-gate] Đang phân tích đồ thị luồng taint để tìm Security Gates trong {tree}...")
+    gates = detect_security_gates(tree, max_gates=max_gates)
+    print(f"[auto-gate] Tìm thấy {len(gates)} cổng kiểm tra an ninh tiềm năng.")
+
+    res = apply_security_gates(tree, gates=gates, min_confidence=min_conf, backup=backup)
+
+    print("\n[auto-gate] KẾT QUẢ CAN THIỆP TỰ ĐỘNG (SMALI AST + MICRO-DEX EMULATOR):")
+    print(f"  - Tổng số cổng phát hiện: {res['total_gates']}")
+    print(f"  - Số cổng can thiệp thành công: {res['applied_count']}")
+    print(f"  - Số cổng bỏ qua: {res['skipped_count']}")
+    print(f"  - Lỗi: {res['errors_count']}")
+
+    if res['applied']:
+        print("\n  Chi tiết các cổng đã can thiệp:")
+        for it in res['applied']:
+            ver_str = " [ĐÃ KIỂM CHỨNG TOÁN HỌC]" if it.get("emulated_verified") else ""
+            print(f"    * {it['class']}->{it['method']} ({it['type']}) - Tin cậy: {it['confidence']:.1f}%{ver_str}")
+
+    return 0 if res["applied_count"] > 0 or res["total_gates"] == 0 else 1
+
+
+def cmd_network_bypass(args):
+    """Đột phá tầng mạng: mở khóa NSC, Cleartext và sinh tập lệnh vô hiệu hóa SSL Pinning đa tầng."""
+    from .network_breakthrough import apply_network_bypass
+
+    target = args.target
+    out_dir = getattr(args, "output_dir", "outputs/network_bypass")
+
+    print(f"[network-bypass] Đang áp dụng đột phá tầng mạng cho {target}...")
+    res = apply_network_bypass(
+        target_path=target,
+        output_dir=out_dir,
+        enable_cleartext=not getattr(args, "no_cleartext", False),
+        gen_ssl_script=not getattr(args, "no_ssl_script", False),
+    )
+
+    print("\n[network-bypass] KẾT QUẢ XỬ LÝ TẦNG MẠNG:")
+    if res.get("nsc_enabler"):
+        nsc = res["nsc_enabler"]
+        print(f"  - Cấu hình an ninh mạng (NSC/Cleartext): {'THÀNH CÔNG' if nsc.get('success') else 'CHƯA ĐỔI'}")
+        for d in nsc.get("details", []):
+            print(f"    * {d}")
+    if res.get("ssl_script_path"):
+        print(f"  - Tập lệnh Universal SSL Pinning Nullifier: {res['ssl_script_path']}")
+    print(f"  - Số quy tắc giả lập gói tin tự động: {res['forge_rules_count']}")
+
+    return 0 if res.get("success") else 1
+
+
+def cmd_native_auto_patch(args):
+    """Đột phá tầng thư viện: quét và đột biến nhị phân zero-drift vô hiệu hóa chốt chặn Native C/C++."""
+    from .behavior.native_mutator import auto_mutate_native
+
+    target = args.target
+    out_dir = getattr(args, "output_dir", "outputs/native_mutator")
+    apply_disk = not getattr(args, "dry_run", False)
+
+    print(f"[native-auto-patch] Đang quét và xử lý chốt chặn an ninh Native trong {target}...")
+    res = auto_mutate_native(
+        target_path=target,
+        output_dir=out_dir,
+        apply_disk=apply_disk,
+        gen_frida=True,
+    )
+
+    print("\n[native-auto-patch] KẾT QUẢ XỬ LÝ TẦNG THƯ VIỆN (.SO):")
+    print(f"  - Tổng số tệp .so đã duyệt: {res['total_so_files']}")
+    print(f"  - Số chốt chặn an ninh phát hiện: {res['findings_count']}")
+    print(f"  - Số tệp .so đã đột biến trực tiếp: {len(res['patched_files'])}")
+    for pf in res['patched_files']:
+        print(f"    * {pf['so_path']} (Đã patch: {pf['patched_count']} vị trí, Backup: {pf.get('backup')})")
+    if res.get("frida_script"):
+        print(f"  - Tập lệnh Native Frida Hook: {res['frida_script']}")
+
+    return 0 if res.get("success") else 1
 
 
 def cmd_arsc_patch(args):
@@ -1602,6 +1830,12 @@ def cmd_suggest(args):
 
 
 def cmd_analyze(args):
+    if getattr(args, "dag", False):
+        from .pipeline_registry import get_pipeline_registry
+        reg = get_pipeline_registry()
+        res = reg.run_pipeline("deep_audit", args.cay_apk)
+        return 0 if res.success else 1
+
     from .smali_sem import build_semantic_report
     report = build_semantic_report(args.cay_apk, top=args.top)
     w = 78
@@ -2221,10 +2455,12 @@ def cmd_smart_scan(args):
         from .behavior.smart_ontology import render_behavior_catalog
         print(render_behavior_catalog())
         return 0
+    if args.benchmark:
+        return cmd_neon_bench_args(args.benchmark, args.o)
     try:
         report = scan_so(args.so, min_len=args.min_len,
                          min_risk=args.min_risk, show_noise=args.show_noise,
-                         scan_refs=args.scan_refs)
+                         scan_refs=args.scan_refs, native=args.native)
     except (ValueError, OSError) as exc:
         print("[patchx] Lỗi smart-scan: %s" % exc)
         return 2
@@ -2232,6 +2468,8 @@ def cmd_smart_scan(args):
     s = report["summary"]
     print("[patchx] Quét thông minh: %s" % report["repro"]["file"])
     print("  SHA-256: %s..." % report["repro"]["file_sha256"][:16])
+    engine = "NEON native" if s.get("native_engine") == "neon" else "Python thuần"
+    print("  Động cơ quét chuỗi: %s" % engine)
     print("  Chuỗi: %d | Giữ: %d | Lọc nhiễu: %d | FP loại: %d"
           % (s["total_strings"], s["kept"], s["noise_dropped"],
              s["false_positive_removed"]))
@@ -2249,6 +2487,33 @@ def cmd_smart_scan(args):
               % (len(report["findings"]) - 15))
 
     from pathlib import Path
+    if getattr(args, "jni", False):
+        from .behavior.rodata_patcher import ElfReader
+        from .behavior.smart_scanner import (scan_register_natives,
+                                             render_frida_for_natives)
+        try:
+            reader = ElfReader(args.so)
+            jni_rep = scan_register_natives(reader)
+        except (ValueError, OSError) as exc:
+            print("[patchx] Lỗi phân tích bảng RegisterNatives: %s" % exc)
+            jni_rep = None
+        if jni_rep is not None:
+            report["jni_natives"] = jni_rep
+            print("[patchx] Bảng RegisterNatives: symbol=%s · %s-bit · mục=%d"
+                  % (jni_rep["has_register_natives_symbol"],
+                     jni_rep["arch"], jni_rep["count"]))
+            for e in jni_rep["entries"][:20]:
+                print("  - %-28s %-16s fn=0x%x (bảng @ 0x%x)"
+                      % (e["name"], e["signature"], e["fn_rva"],
+                         e["table_offset"]))
+            if getattr(args, "jni_frida", None):
+                script = render_frida_for_natives(
+                    jni_rep, module_name=Path(args.so).name)
+                p = Path(args.jni_frida)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(script, encoding="utf-8")
+                print("[patchx] Đã ghi Frida hook:", p)
+
     base = Path(args.o) if args.o else None
     md_path = Path(args.md) if args.md else None
     if base is None:
@@ -2273,6 +2538,56 @@ def cmd_smart_scan(args):
     return 0
 
 
+def cmd_neon_bench_args(size_mb: int, out_json) -> int:
+    """Chạy phép đo NEON vs Python từ cờ --benchmark của smart-scan."""
+    from .neon_scan import benchmark as neon_benchmark, native_status, compile_native
+    st = native_status()
+    print("[patchx] Đo tốc độ NEON (biên dịch clang -O3 tại chỗ)")
+    if not compile_native():
+        print("  %sLỗi biên dịch:%s %s" % (C.RED, C.RST, st.get("error")))
+        return 2
+    res = neon_benchmark(size_mb=size_mb, iterations=3)
+    print("  Python thuần: %.2f GB/s | NEON native: %.2f GB/s | nhanh hơn %sx"
+          % (res["python_gbps"], res["native_gbps"], res.get("speedup")))
+    print("  Kết quả khớp nhau: dải byte=%s · mẫu chính xác=%s"
+          % (res.get("same_runs"), res.get("same_find")))
+    if out_json:
+        from pathlib import Path
+        p = Path(out_json)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(res, ensure_ascii=False, indent=2),
+                     encoding="utf-8")
+        print("[patchx] Đã ghi JSON:", p)
+    return 0
+
+
+def cmd_neon_bench(args):
+    """Lệnh riêng: đo tốc độ GB/s thật của đường quét NEON ARM64."""
+    from .neon_scan import benchmark as neon_benchmark, native_status, compile_native
+    st = native_status()
+    print(f"{C.BLD}{C.CYN}Đo tốc độ quét NEON ARM64 (không tự nhận số ảo){C.RST}")
+    if not compile_native():
+        print(f"  {C.RED}Lỗi biên dịch:{C.RST} {st.get('error')}")
+        return 2
+    res = neon_benchmark(size_mb=args.size_mb, needle=args.needle.encode("utf-8", "replace"),
+                         iterations=max(1, args.iterations))
+    if not res.get("native_available"):
+        print(f"  {C.RED}Không dùng được đường native:{C.RST} {res.get('error')}")
+        return 2
+    print("  Python thuần: %.2f GB/s" % res["python_gbps"])
+    print("  NEON native : %.2f GB/s" % res["native_gbps"])
+    print("  Tỉ lệ tăng tốc: %sx" % res.get("speedup"))
+    print("  Kết quả khớp nhau: dải byte=%s · mẫu chính xác=%s"
+          % (res.get("same_runs"), res.get("same_find")))
+    if args.o:
+        from pathlib import Path
+        p = Path(args.o)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("[patchx] Đã ghi JSON:", p)
+    return 0
+
+
 def cmd_start_scan(args):
     """start-scan — xử lý THƯ VIỆN lib .so (APK/thư mục/file) -> báo cáo tổng hợp.
     Tách biệt: start-scan = native .so; behavior = smali."""
@@ -2281,7 +2596,7 @@ def cmd_start_scan(args):
     try:
         report = start_scan(args.target, abi=args.abi, min_len=args.min_len,
                             min_risk=args.min_risk, show_noise=args.show_noise,
-                            keep_extract=args.keep_so)
+                            keep_extract=args.keep_so, native=args.native)
     except (ValueError, OSError) as exc:
         print("[patchx] Lỗi start-scan: %s" % exc)
         return 2
@@ -2291,6 +2606,8 @@ def cmd_start_scan(args):
     print("  Lib: %d (OK %d · lỗi %d) | Chuỗi: %d | Finding: %d | Nhiễu: %d"
           % (s["libs_scanned"], s["libs_ok"], s["libs_errored"],
              s["total_strings"], s["total_findings"], s["total_noise"]))
+    print("  Động cơ quét: %d lib NEON native · %d lib Python thuần"
+          % (s.get("neon_libs", 0), s.get("python_libs", 0)))
     print("  Tham chiếu: %d (JNI: %d) | Cao: %d | TB: %d | Thấp: %d | "
           "TB confidence: %.1f%%"
           % (s["refs_found"], s["jni_refs"], s["flagged_high"],
@@ -2686,6 +3003,7 @@ def cmd_ui(args):
 
 
 def cmd_behavior(args):
+    from .behavior.detector import BehaviorDetector
     root = args.thu_muc
     print("[patchx] Phân tích hành vi:")
     print("  Cây APK: %s" % root)
@@ -2706,6 +3024,8 @@ def cmd_behavior(args):
 
 
 def cmd_targets(args):
+    from .behavior.detector import BehaviorDetector
+    from .behavior.target import TargetAnalyzer
     root = args.thu_muc
     print("[patchx] Xác định mục tiêu sửa đổi:")
     print("  Cây APK: %s" % root)
@@ -2982,7 +3302,7 @@ def cmd_stats(args):
 
 def cmd_clean(args):
     import shutil
-    target_dirs = ["_patchx", "combos_auto", "combos_llm", "outputs"]
+    target_dirs = ["combos_auto", "combos_llm", "outputs/tu-sinh"]
     removed = 0
     for d in target_dirs:
         p = os.path.join(args.thu_muc, d)
@@ -2990,103 +3310,125 @@ def cmd_clean(args):
             try:
                 if os.path.isdir(p):
                     shutil.rmtree(p)
+                    os.makedirs(p, exist_ok=True)
                 else:
                     os.remove(p)
-                print("[patchx] Đã xóa:", p)
+                print("[patchx] Đã dọn sạch tệp tự sinh/tạm:", p)
                 removed += 1
             except Exception as e:
                 print("[patchx] Không thể xóa %s: %s" % (p, e))
-    print("[patchx] Đã dọn dẹp %d thư mục/tệp tạm." % removed)
+    print("[patchx] Đã dọn dẹp %d thư mục/tệp tự sinh tạm thời." % removed)
     return 0
 
 
+def cmd_precompile(args):
+    """Tiền biên dịch toàn bộ mã nguồn Python thành mã máy bytecode (.pyc) trên 8 nhân CPU."""
+    from tools.precompile import precompile_toolkit
+    workers = getattr(args, "workers", None)
+    opt = getattr(args, "optimize", 1)
+    success, _ = precompile_toolkit(workers=workers, opt_level=opt)
+    return 0 if success else 1
+
+
 COMMAND_GROUPS = [
-    ("1. TIẾP NHẬN & CHẨN ĐOÁN HỆ THỐNG", [
-        ("intake", "Tiếp nhận APK/APKS/XAPK/AAB và trích xuất bằng chứng (Zero-Extraction)"),
-        ("capabilities", "Ghi nhận và kiểm tra năng lực công cụ môi trường (tool_capabilities)"),
-        ("signature-cert", "Trích DER cert gốc và SHA-256 từ APK gốc"),
-        ("selfcheck", "Tự kiểm tra toàn diện module lõi và kho patch"),
+    ("1. TIẾP NHẬN & KIỂM TRA HỆ THỐNG", [
+        ("intake", "Tiếp nhận tệp ứng dụng và trích xuất thông tin ban đầu không cần giải nén"),
+        ("capabilities", "Kiểm tra đầy đủ năng lực và các công cụ hỗ trợ trên hệ máy"),
+        ("signature-cert", "Trích xuất chứng chỉ gốc và dấu vân tay bảo mật của ứng dụng"),
+        ("selfcheck", "Tự kiểm tra toàn diện hoạt động của các bộ phận và kho dữ liệu"),
+        ("precompile", "Tiền biên dịch toàn bộ mã nguồn hệ thống sang bytecode tối ưu trên 8 nhân CPU"),
     ]),
-    ("2. PHÂN TÍCH NGỮ NGHĨA SÂU & TAINT FLOW (ZERO-WORKKEY)", [
-        ("analyze", "Phân tích ngữ nghĩa cây APK, quét Packer & Security Gates không cần workkey"),
-        ("model", "Tạo mô hình trung gian app_model (V1/V2) đồ thị gọi hàm & điểm quyết định"),
-        ("semantic-plan", "Đánh giá kế hoạch ngữ nghĩa theo mục tiêu và điều kiện logic"),
-        ("plan-compile", "Tạo transaction nháp từ semantic-plan V2"),
-        ("plan-preflight", "Đánh giá lại draft transaction trước khi áp vào APK"),
-        ("behavior", "Phân tích hành vi APK dựa trên bằng chứng và sự kiện"),
-        ("targets", "Xác định mục tiêu cần xem xét sửa đổi trong mã nguồn"),
-        ("targets-fused", "Xác định và phân hạng mục tiêu hợp nhất đa nguồn (Behavior + Security Gates)"),
-        ("discover", "Phân tích toàn diện: Quét tệp nhạy cảm (assets/cert/db) & Khai phá từ điển động"),
+    ("2. PHÂN TÍCH MÃ NGUỒN & TÌM CỔNG KIỂM TRA TỰ ĐỘNG", [
+        ("analyze", "Phân tích cấu trúc mã nguồn, phát hiện lớp vỏ bọc và cổng kiểm tra bảo vệ"),
+        ("model", "Dựng sơ đồ cấu trúc ứng dụng và các điểm quyết định rẽ nhánh logic"),
+        ("semantic-plan", "Lập kế hoạch xử lý rẽ nhánh theo mục tiêu và điều kiện cần đạt"),
+        ("plan-compile", "Tạo bản nháp các bước chỉnh sửa chuẩn xác từ kế hoạch"),
+        ("plan-preflight", "Thẩm định lại bản nháp các bước trước khi ghi đè vào ứng dụng"),
+        ("behavior", "Phân tích hành vi hoạt động của ứng dụng dựa trên dấu vết thực tế"),
+        ("targets", "Xác định danh sách các vị trí then chốt cần chỉnh sửa trong mã nguồn"),
+        ("targets-fused", "Hợp nhất các vị trí cần sửa từ nhiều nguồn phân tích để tránh nhầm lẫn"),
+        ("discover", "Khám phá toàn diện: Quét tài nguyên nhạy cảm và dò tìm từ khóa ẩn"),
+        ("unflatten", "Gỡ phẳng luồng mã bị làm rối kiểu switch-case và cắt tỉa khối chết"),
     ]),
-    ("3. ĐIỀU PHỐI PIPELINE HỢP NHẤT & TỰ ĐỘNG HÓA", [
-        ("pipeline", "Khởi chạy Pipeline Thống Nhất đa tầng (auto|intake|semantic|fast|native|combo)"),
-        ("behavior-pipeline", "Chạy luồng khép kín: detector -> cfg -> target -> hook -> frida"),
-        ("gadget-pipeline", "Nhúng Frida Gadget offline vào APK/cây APK (không cần Root)"),
-        ("smart-combo", "Tự động sinh combo tối ưu từ Active Learning (AST Smali + combos_success)"),
-        ("subtitle-tts", "Động cơ đọc phụ đề thời gian thực bằng giọng nói TTS (Kinh nghiệm 15)"),
-        ("auto-refresh", "Tự động reset & bật lại dịch phụ đề + chia sẻ toàn màn hình sau mỗi 2m40s"),
+    ("3. ĐIỀU PHỐI QUY TRÌNH HỢP NHẤT & TỰ ĐỘNG HÓA", [
+        ("dag", "Quản lý sơ đồ điều phối thứ tự công việc và sổ bộ quy trình mẫu"),
+        ("pipeline", "Chạy quy trình xử lý trọn gói đa tầng từ kiểm tra đến đóng gói"),
+        ("behavior-pipeline", "Quy trình khép kín: tìm dấu vết -> lập sơ đồ -> chọn mục tiêu -> tạo lệnh can thiệp"),
+        ("gadget-pipeline", "Gắn công cụ can thiệp tạm thời vào ứng dụng (dùng tốt trên máy không có quyền quản trị)"),
+        ("smart-combo", "Tự động tạo bộ gói chỉnh sửa tối ưu dựa trên bài học thành công trước đó"),
+        ("autopilot", "Điều phối tự hành một chạm toàn trình: vá toàn vẹn, mạng, mã máy, kiểm chứng và đóng gói"),
+        ("subtitle-tts", "Đọc phụ đề thời gian thực bằng giọng nói tiếng Việt dễ nghe"),
+        ("auto-refresh", "Tự động bật lại dịch phụ đề và chia sẻ màn hình sau mỗi 160 giây"),
     ]),
-    ("4. CAN THIỆP NHỊ PHÂN SIÊU TỐC IN-PLACE (<0.5S)", [
-        ("fast-patch", "Quy trình 1-Click vá DEX/AXML/ARSC in-place và repack APK siêu tốc"),
-        ("dex-patch", "Patch chuỗi và opcode bytecode DEX trực tiếp, không qua apktool"),
-        ("axml-patch", "Patch nhị phân AndroidManifest.xml (vượt NSC/pinning, đổi quyền)"),
-        ("arsc-patch", "Phân tích và thay thế chuỗi trong bảng tài nguyên resources.arsc"),
-        ("apk-repack-fast", "Repack APK nhanh chỉ với entry thay đổi, giữ nguyên nén"),
-        ("macro-list", "Liệt kê Smali macro an toàn và yêu cầu register"),
+    ("4. SỬA ĐỔI TRỰC TIẾP SIÊU TỐC KHÔNG CẦN RÃ TỆP (<0.5 GIÂY)", [
+        ("fast-patch", "Vá trực tiếp ruột tệp và đóng gói ứng dụng siêu tốc chỉ mất nửa giây"),
+        ("dex-patch", "Sửa trực tiếp chuỗi chữ và mã lệnh trong tệp thực thi, không cần tháo tệp"),
+        ("axml-patch", "Sửa tệp cấu hình chính để vượt cổng chứng chỉ mạng và cấp quyền"),
+        ("arsc-patch", "Tìm và thay thế các dòng chữ trong bảng tài nguyên ngôn ngữ"),
+        ("apk-repack-fast", "Đóng gói lại ứng dụng siêu nhanh chỉ với những phần đã sửa đổi"),
+        ("macro-list", "Xem danh sách các đoạn mã mẫu an toàn và số thanh ghi cần chuẩn bị"),
     ]),
-    ("5. NATIVE LAYER & FRIDA MEMORY HOOK", [
-        ("native-sig-bypass", "Tự động quét và bypass SHA-256 cert hash trong thư viện native .so"),
-        ("start-scan", "Quét TOÀN BỘ lib .so trong APK/thư mục/file — báo cáo tổng hợp"),
-        ("rodata-find", "Tìm RVA của chuỗi trong .rodata/.data của file .so"),
-        ("rodata-apply", "Chèn chuỗi TRỰC TIẾP vào file .so (patch nhị phân, không cần Frida)"),
-        ("rodata-patch", "Sinh script Frida patch chuỗi trong .rodata trên RAM"),
-        ("smart-scan", "Quét chuỗi .rodata/.data thông minh với điểm tin cậy Confidence Score"),
-        ("remote-observe", "Quan sát và điều khiển hành vi từ xa qua Frida"),
-        ("remote-patch", "Sinh patch ép flag điều khiển từ xa"),
-        ("remote-map", "Tạo bản đồ flag điều khiển từ xa"),
-        ("frida", "Sinh Frida script từ tệp phân tích hành vi"),
+    ("5. XỬ LÝ MÃ MÁY & CAN THIỆP BỘ NHỚ TẠM THỜI", [
+        ("native-sig-bypass", "Tự động quét và xử lý kiểm tra dấu vân tay chứng chỉ trong tệp mã máy"),
+        ("start-scan", "Quét toàn bộ các tệp mã máy trong ứng dụng và lập bảng tổng hợp"),
+        ("rodata-find", "Tìm địa chỉ chính xác của dòng chữ trong vùng nhớ tệp mã máy"),
+        ("rodata-apply", "Ghi đè trực tiếp dòng chữ thay thế vào tệp mã máy trên đĩa"),
+        ("rodata-patch", "Tạo lệnh can thiệp tạm thời vào dòng chữ trong bộ nhớ khi ứng dụng đang chạy"),
+        ("smart-scan", "Dò tìm dòng chữ thông minh kèm điểm đánh giá độ chính xác"),
+        ("neon-bench", "Đo tốc độ GB/s thật của đường quét NEON ARM64 so với Python thuần"),
+        ("remote-observe", "Quan sát và theo dõi cờ trạng thái từ xa khi ứng dụng chạy"),
+        ("remote-patch", "Tạo lệnh ép đặt giá trị cờ trạng thái từ xa theo ý muốn"),
+        ("remote-map", "Lập bản đồ các vị trí cờ trạng thái có thể điều khiển từ xa"),
+        ("frida", "Tạo kịch bản can thiệp bộ nhớ tự động từ kết quả phân tích hành vi"),
     ]),
-    ("6. QUẢN TRỊ BỘ PATCH & KHUNG COMBO", [
-        ("combo", "Tạo các bộ gộp patch (combos) có độ tương thích cao"),
-        ("diff-apk", "Sinh patch từ khác biệt giữa hai APK/cây giải mã"),
-        ("suggest-apk", "Gợi ý chuỗi patch tương thích dựa trên cấu trúc APK thật"),
-        ("suggest-llm", "Gợi ý patch theo ý định người dùng"),
-        ("roadmap", "Sinh roadmap lộ trình thực thi chuỗi patch"),
-        ("simulate", "Mô phỏng áp patch lên cây APK không làm thay đổi tệp gốc"),
-        ("smart-patch", "Bản patch thông minh smali chống R8/D8 và obfuscation"),
-        ("pairip-bypass", "Vô hiệu hóa PairIP (license check) trên cây APK"),
+    ("6. QUẢN LÝ GÓI SỬA ĐỔI & GHÉP BỘ TỰ ĐỘNG", [
+        ("combo", "Ghép các gói chỉnh sửa nhỏ thành bộ gói lớn có độ tương thích cao"),
+        ("diff-apk", "Tạo gói sửa đổi từ sự khác biệt giữa ứng dụng gốc và bản đã sửa"),
+        ("suggest-apk", "Gợi ý các bước sửa đổi phù hợp dựa trên cấu trúc ứng dụng thực tế"),
+        ("suggest-llm", "Gợi ý phương án sửa đổi theo yêu cầu bằng ngôn ngữ tự nhiên"),
+        ("roadmap", "Lập lộ trình từng bước sửa đổi theo thứ tự ưu tiên hợp lý"),
+        ("simulate", "Thử nghiệm áp dụng sửa đổi ảo trong bộ nhớ, không làm hỏng tệp gốc"),
+        ("smart-patch", "Bản sửa đổi thông minh tự động thích ứng với mã nguồn bị làm rối"),
+        ("pairip-bypass", "Vô hiệu hóa cổng kiểm tra bản quyền PairIP trên ứng dụng"),
     ]),
-    ("7. KIỂM ĐỊNH CHẤT LƯỢNG & GIAO DIỆN ĐIỀU KHIỂN", [
-        ("scan", "Quét thư mục patch và in tóm tắt"),
-        ("index", "Tạo patchx_index.json + report.md"),
-        ("report", "Tạo báo cáo HTML cho kho patch"),
-        ("dupes", "Phát hiện và phân nhóm patch trùng nội dung"),
-        ("manifest", "Tạo MANIFEST.json cho toàn bộ cây thư mục"),
-        ("verify-manifest", "Xác minh kho theo MANIFEST.json"),
-        ("audit", "Kiểm tra kiến trúc và chuẩn mực từng patch"),
-        ("upgrade", "Nâng cấp patch an toàn sang chuẩn v3"),
-        ("optimize", "Gộp và tối ưu hóa thứ tự các khối lệnh patch"),
-        ("apply", "Áp patch lên cây APK thực tế"),
-        ("ci", "Dây chuyền kiểm định CI tự động"),
-        ("golden", "Cổng thẩm định Golden Gate Build"),
-        ("validate", "Xác thực cây APK (smali, XML, DEX)"),
-        ("apk-prepare", "Giải mã APK bằng apktool tiêu chuẩn"),
-        ("test", "Chạy bộ kiểm tra nội bộ"),
-        ("dex-budget", "Ước lượng giới hạn số lượng tham chiếu DEX (DEX refs)"),
-        ("preflight", "Kiểm tra tiền khả thi trước khi áp patch"),
-        ("fuzz", "Tấn công fuzz/chaos parser & engine"),
-        ("failure", "Cơ sở dữ liệu Failure Intelligence ghi nhận lỗi"),
-        ("baseline", "Chụp và so sánh baseline performance/metrics"),
-        ("coverage", "Đo độ bao phủ của patch trên mã nguồn"),
-        ("suggest", "Tự đề xuất cải tiến cho patch"),
-        ("acceptance", "Chạy tiêu chí nghiệm thu V2"),
-        ("knowledge", "Quản lý kho tri thức nghiệm thu"),
-        ("menu", "Bảng điều khiển tương tác chọn pipeline có phân nhóm"),
-        ("ui", "Giao diện dòng lệnh TUI trực quan"),
-        ("stats", "Thống kê tổng quan kho patch"),
-        ("clean", "Dọn dẹp tệp và thư mục tạm"),
+    ("7. KIỂM TRA CHẤT LƯỢNG & BẢNG ĐIỀU KHIỂN", [
+        ("scan", "Quét thư mục chứa các gói sửa đổi và in thông số tổng quan"),
+        ("index", "Lập danh mục chỉ mục và báo cáo tổng hợp chi tiết"),
+        ("report", "Xuất báo cáo trang trực quan sinh động cho kho gói sửa đổi"),
+        ("dupes", "Phát hiện và phân loại các gói sửa đổi bị trùng lặp nội dung"),
+        ("manifest", "Tạo tệp kê khai dấu vân tay toàn bộ thư mục để kiểm tra sai lệch"),
+        ("verify-manifest", "Đối chiếu và xác minh kho tệp theo tệp kê khai dấu vân tay"),
+        ("audit", "Kiểm tra cấu trúc và chuẩn mực kỹ thuật của từng gói sửa đổi"),
+        ("upgrade", "Nâng cấp gói sửa đổi cũ lên chuẩn định dạng mới an toàn hơn"),
+        ("optimize", "Gom nhóm và sắp xếp lại các bước sửa đổi cho tối ưu tốc độ"),
+        ("apply", "Áp dụng các gói sửa đổi trực tiếp lên cây mã nguồn thực tế"),
+        ("ci", "Quy trình tự động kiểm tra chất lượng liên tục từ đầu đến cuối"),
+        ("golden", "Cửa kiểm định chất lượng nghiêm ngặt trước khi cho phép xuất xưởng"),
+        ("validate", "Xác thực tính nguyên vẹn và cú pháp của toàn bộ cây mã nguồn"),
+        ("integrity-gate", "Một cổng kiểm tra toàn vẹn xuyên tầng G1..G5 cho smali/DEX/ELF/APK/cây"),
+        ("apk-prepare", "Tháo rã toàn bộ ứng dụng bằng công cụ giải mã tiêu chuẩn"),
+        ("test", "Chạy bộ kiểm tra tự động nội bộ để phát hiện sai sót"),
+        ("dex-budget", "Tính toán số lượng tham chiếu mã nguồn để chống tràn giới hạn hệ thống"),
+        ("preflight", "Kiểm tra điều kiện môi trường trước khi thực hiện công việc lớn"),
+        ("fuzz", "Kiểm tra độ bền của hệ thống bằng dữ liệu thử thách bất thường"),
+        ("failure", "Sổ ghi chép các sự cố đã gặp và cách thức khắc phục thành công"),
+        ("baseline", "Lưu lại mốc đo tốc độ chuẩn để đối chiếu độ mượt mà về sau"),
+        ("coverage", "Đo lường mức độ bao phủ của các điểm chỉnh sửa trên mã nguồn"),
+        ("suggest", "Tự động đề xuất cách cải tiến và hoàn thiện nội dung chỉnh sửa"),
+        ("acceptance", "Đối chiếu theo bộ tiêu chuẩn nghiệm thu chất lượng chính thức"),
+        ("knowledge", "Quản lý kho tri thức kinh nghiệm tích lũy qua các phiên làm việc"),
+        ("menu", "Bảng điều khiển tương tác chọn quy trình làm việc theo mục tiêu"),
+        ("ui", "Giao diện dòng lệnh hiển thị bảng biểu màu sắc dễ nhìn"),
+        ("stats", "Thống kê tổng thể về số lượng gói, dung lượng và kết quả thành công"),
+        ("clean", "Dọn dẹp sạch sẽ các tệp nháp và thư mục tạm để nhẹ máy"),
     ]),
 ]
+
+
+def cmd_packet(args):
+    """Điều phối nhóm công cụ an ninh mạng gói tin cho Toolkit."""
+    from .packet_security.cli import main as packet_security_main
+    return packet_security_main([args.tool] + list(args.tool_args))
 
 
 def command_at_position(position):
@@ -3098,20 +3440,27 @@ def command_at_position(position):
 
 
 GROUP_COLORS = {
-    "1. TIẾP NHẬN & CHẨN ĐOÁN HỆ THỐNG": (C.CYN, "🔍"),
-    "2. PHÂN TÍCH NGỮ NGHĨA SÂU & TAINT FLOW (ZERO-WORKKEY)": (C.MAG, "🧠"),
-    "3. ĐIỀU PHỐI PIPELINE HỢP NHẤT & TỰ ĐỘNG HÓA": (C.GRN, "⚡"),
-    "4. CAN THIỆP NHỊ PHÂN SIÊU TỐC IN-PLACE (<0.5S)": (C.YEL, "🚀"),
-    "5. NATIVE LAYER & FRIDA MEMORY HOOK": (C.RED, "🛡️"),
-    "6. QUẢN TRỊ BỘ PATCH & KHUNG COMBO": (C.BLU, "📦"),
-    "7. KIỂM ĐỊNH CHẤT LƯỢNG & GIAO DIỆN ĐIỀU KHIỂN": (C.WHT, "🛠️"),
+    "1. TIẾP NHẬN & KIỂM TRA HỆ THỐNG": (C.CYN, "🔍"),
+    "2. PHÂN TÍCH MÃ NGUỒN & TÌM CỔNG KIỂM TRA TỰ ĐỘNG": (C.MAG, "🧠"),
+    "3. ĐIỀU PHỐI QUY TRÌNH HỢP NHẤT & TỰ ĐỘNG HÓA": (C.GRN, "⚡"),
+    "4. SỬA ĐỔI TRỰC TIẾP SIÊU TỐC KHÔNG CẦN RÃ TỆP (<0.5 GIÂY)": (C.YEL, "🚀"),
+    "5. XỬ LÝ MÃ MÁY & CAN THIỆP BỘ NHỚ TẠM THỜI": (C.RED, "🛡️"),
+    "6. QUẢN LÝ GÓI SỬA ĐỔI & GHÉP BỘ TỰ ĐỘNG": (C.BLU, "📦"),
+    "7. KIỂM TRA CHẤT LƯỢNG & BẢNG ĐIỀU KHIỂN": (C.WHT, "🛠️"),
 }
 
 
 class GroupedArgumentParser(argparse.ArgumentParser):
     """Trình hiển thị trợ giúp phân nhóm pipeline & lệnh cho PatchX với màu sắc trực quan."""
 
+    def __init__(self, *args, **kwargs):
+        if "prog" not in kwargs:
+            kwargs["prog"] = "patchx"
+        super().__init__(*args, **kwargs)
+
     def format_help(self):
+        if self.prog != "patchx":
+            return super().format_help()
         w = 78
         lines = [
             f"{C.BLD}{C.CYN}╔{'═' * (w - 2)}╗{C.RST}",
@@ -3140,6 +3489,243 @@ class GroupedArgumentParser(argparse.ArgumentParser):
         lines.append(f"{C.BLD}{C.GRN}💡 Mẹo:{C.RST} Gõ {C.BLD}patchx LỆNH -h{C.RST} để xem chi tiết đối số từng lệnh.")
         lines.append(f"{C.BLD}{C.YEL}⚡ Gợi ý chạy nhanh:{C.RST} {C.DIM}patchx pipeline <file.apk> --mode auto{C.RST}\n")
         return "\n".join(lines)
+
+
+def cmd_integrity_decouple(args):
+    """Điều phối AIDM: triệt tiêu 4 tầng kiểm soát toàn vẹn."""
+    from .integrity_decoupler import decouple_integrity
+
+    raw = getattr(args, "spearheads", "all")
+    if raw in ("", "all", "ALL", "tat-ca"):
+        spearheads = (1, 2, 3, 4)
+    else:
+        try:
+            spearheads = tuple(int(x.strip()) for x in raw.split(",") if x.strip())
+        except ValueError:
+            print(f"{C.RED}Lỗi:{C.RST} --spearheads phải là 'all' hoặc danh sách 1-4 cách nhau dấu phẩy.")
+            return 1
+        spearheads = tuple(x for x in spearheads if 1 <= x <= 4)
+
+    report = decouple_integrity(
+        target=args.target,
+        orig_apk=getattr(args, "orig_apk", None),
+        new_apk=getattr(args, "new_apk", None),
+        so_dir=getattr(args, "so_dir", None),
+        out_dir=args.output_dir,
+        spearheads=spearheads,
+        dry_run=args.dry_run,
+    )
+
+    print(f"{C.BLD}{C.CYN}Kết quả triệt tiêu toàn vẹn (AIDM){C.RST}")
+    print(f"  Mục tiêu: {report['target']}")
+    print(f"  Chế độ: {'phân tích (dry-run)' if report['dry_run'] else 'ghi thật (có sao lưu)'}")
+    print(f"  Tệp smali quét: {report['files_scanned']} · tệp đổi: {report['files_patched']}")
+    print(f"  Phương thức đổi: {report['methods_patched']}")
+    print(f"  Installer đã thay: {report['installer_decoupled']} · ép chữ ký: {report['signing_forced']}")
+    print(f"  Thoát đã vô hiệu: {report['exits_neutralized']} · nhánh đã đảo: {report['branches_inverted']}")
+    if report.get("native"):
+        print(f"  Native .so đã vá: {len(report['native'].get('native_patches', []))}")
+    if report.get("play_integrity"):
+        print(f"  Hook Play Integrity: {report['play_integrity']['hook']}")
+    if report.get("warnings"):
+        print(f"{C.YEL}  Cảnh báo:{C.RST}")
+        for w in report["warnings"]:
+            print(f"    - {w}")
+    print(f"  Báo cáo: {report.get('report_path')}")
+    return 0
+
+
+def cmd_autopilot(args):
+    """Điều phối tự hành toàn trình: toàn vẹn -> cổng -> mạng -> native."""
+    import json
+    import os
+    from pathlib import Path
+    from .orchestrator import AutopilotOrchestrator
+
+    target = args.target
+    out_dir = args.output_dir or os.path.join(BASE_DIR, "outputs", "autopilot")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    raw = getattr(args, "spearheads", "all")
+    if raw in ("", "all", "ALL", "tat-ca"):
+        spearheads = (1, 2, 3, 4)
+    else:
+        try:
+            spearheads = tuple(int(x.strip()) for x in raw.split(",") if x.strip())
+        except ValueError:
+            print(f"{C.RED}Lỗi:{C.RST} --spearheads phải là 'all' hoặc danh sách 1-4 cách nhau dấu phẩy.")
+            return 1
+        spearheads = tuple(x for x in spearheads if 1 <= x <= 4)
+
+    orch = AutopilotOrchestrator(
+        target=target,
+        out_dir=out_dir,
+        spearheads=spearheads,
+        dry_run=getattr(args, "dry_run", False),
+        so_dir=getattr(args, "so_dir", None),
+        orig_apk=getattr(args, "orig_apk", None),
+        new_apk=getattr(args, "new_apk", None),
+        network=getattr(args, "network", False),
+        native_patch=getattr(args, "native_patch", False),
+        unflatten=getattr(args, "unflatten", False),
+        unflatten_limit=getattr(args, "unflatten_limit", 0),
+        decompile=getattr(args, "decompile", False),
+        package=getattr(args, "package", True),
+    )
+    report = orch.run_full_pipeline()
+    report_path = os.path.join(out_dir, "report.json")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, ensure_ascii=False, indent=2)
+
+    print(f"{C.BLD}{C.CYN}Autopilot toàn trình{C.RST} — chế độ: {report['mode']}")
+    print(f"  Mục tiêu: {target}")
+    for s in report["steps"]:
+        if s.get("skipped"):
+            print(f"  - {s['name']}: BỎ QUA")
+        elif s.get("ok"):
+            print(f"  - {s['name']}: OK ({s.get('elapsed_ms', 0)}ms)")
+        else:
+            print(f"{C.RED}  - {s['name']}: LỖI{C.RST} {s.get('error', '')}")
+    print(f"  Tổng: {report['elapsed_seconds']}s · báo cáo: {report_path}")
+    return 0
+
+
+def cmd_unflatten(args):
+    """Gỡ phẳng luồng mã switch-case và cắt tỉa khối chết (có sao lưu)."""
+    import os
+    from .cfg_unflatten import unflatten_file, unflatten_tree
+    target = args.target
+    if os.path.isdir(target):
+        rep = unflatten_tree(
+            target, apply=args.apply, limit=args.limit,
+            min_cases=args.min_cases, backup_root=args.backup_root)
+        print(f"{C.BLD}{C.CYN}Gỡ phẳng luồng mã — cây:{C.RST} {target}")
+        print(f"  Tệp quét: {rep['files_scanned']} · tệp có mã làm phẳng: "
+              f"{rep['files_unflattened']} · tệp đã ghi: {rep['files_applied']}")
+        print(f"  Phương thức: {rep['methods_total']} · đã gỡ phẳng: "
+              f"{rep['methods_unflattened']}")
+    else:
+        rep = unflatten_file(
+            target, apply=args.apply, backup=True,
+            min_cases=args.min_cases, backup_root=args.backup_root)
+        print(f"{C.BLD}{C.CYN}Gỡ phẳng luồng mã — tệp:{C.RST} {target}")
+        print(f"  Phương thức: {rep['methods_total']} · đã gỡ phẳng: "
+              f"{rep['methods_unflattened']} · đã ghi: "
+              f"{'có' if rep['applied'] else 'chưa (chỉ phân tích)'}")
+        if rep.get("backup"):
+            print(f"  Sao lưu: {rep['backup']}")
+        for d in rep.get("details", [])[:20]:
+            print(f"  - {d['method'][:80]} | case={d['case_count']} "
+                  f"hoàn_chỉnh={d['complete']} khối_chết={len(d['dead_blocks_removed'])}")
+    if args.o:
+        from pathlib import Path
+        p = Path(args.o)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("[patchx] Đã ghi JSON:", p)
+    return 0
+
+
+def cmd_integrity_gate(args):
+    """Một cổng kiểm tra toàn vẹn xuyên tầng: G1..G5."""
+    import os
+    from .integrity_gate import gate_target, gate_tree, gate_apk
+    target = args.target
+    if os.path.isdir(target):
+        rep = gate_tree(target)
+    elif target.lower().endswith(".apk"):
+        rep = gate_apk(target)
+    else:
+        exp = getattr(args, "g3_expected", True)
+        if isinstance(exp, str):
+            exp = exp.strip().lower() not in ("0", "false", "none", "no")
+        rep = gate_target(
+            target, layer=args.layer,
+            g3_method=getattr(args, "g3_method", None),
+            g3_expected=exp,
+            g4_expected=getattr(args, "g4_expected", None))
+    print(f"{C.BLD}{C.CYN}Cổng toàn vẹn (G1..G5){C.RST} — {target}")
+    print(f"  Kết luận: {C.GRN if rep['verdict'] == 'PASS' else C.RED}"
+          f"{rep['verdict']}{C.RST}")
+    if "layers" in rep:
+        for name, chk in rep["layers"].items():
+            mark = C.GRN + "ĐẠT" if chk["ok"] else C.RED + "LỖI"
+            print(f"  - {name}: {mark}{C.RST}"
+                  + ("" if chk["ok"] else " · %s" % chk.get("reason", "")))
+    else:
+        print(f"  Tệp kiểm: {rep.get('files_checked', 0)} · đạt: {rep.get('passed', 0)}")
+        for f in rep.get("failed", [])[:10]:
+            print(f"  - {C.RED}LỖI{C.RST} {f.get('layer')} · {f.get('reason')}")
+    if args.o:
+        from pathlib import Path
+        p = Path(args.o)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("[patchx] Đã ghi JSON:", p)
+    return 0 if rep["verdict"] == "PASS" else 1
+
+
+def cmd_ast_dsl(args):
+    """Vá ngữ nghĩa bằng ngôn ngữ quy tắc trên cây AST Smali (T1)."""
+    from .ast_dsl import apply_patch_dsl, load_rules
+    rules = load_rules(args.rules)
+    rep = apply_patch_dsl(
+        args.target, rules, dry_run=not args.apply,
+        output_dir=args.output_dir if not args.apply else None)
+    print(f"{C.BLD}{C.CYN}AST DSL — vá ngữ nghĩa theo quy tắc{C.RST} — {args.target}")
+    print(f"  Quy tắc: {rep['tong_quy_tac']} · tệp quét: {rep['tep_quet']} · "
+          f"tệp đổi: {rep['tep_doi']} · phương thức đổi: {rep['phuong_thuc_doi']}")
+    for d in rep.get("chi_tiet", [])[:20]:
+        canh_bao = (" · " + d["canh_bao"]) if d.get("canh_bao") else ""
+        print(f"  - {d['tep']} :: {d['phuong_thuc']} :: {d['quy_tac']}{canh_bao}")
+    if args.o:
+        from pathlib import Path
+        p = Path(args.o)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("[patchx] Đã ghi JSON:", p)
+    return 0
+
+
+def cmd_dex_method(args):
+    """Trình sửa DEX ở mức phương thức (T2): xem bản đồ hoặc vá opcode cùng độ dài."""
+    from pathlib import Path
+    from .dex_inplace import (apply_dex_method_patch,
+                              map_methods_report)
+    dex = args.dex
+    if args.map:
+        rep = map_methods_report(Path(dex).read_bytes(), filter_regex=args.method)
+        print(f"{C.BLD}{C.CYN}DEX method map{C.RST} — {dex}")
+        print(f"  magic={rep['header']['magic']} · method_ids="
+              f"{rep['header']['method_ids']} · class_defs={rep['header']['class_defs']}")
+        for m in rep["methods"][:40]:
+            code = (f"off={m.get('insns_off')} · insns={m.get('insns_size')}"
+                    if m.get("has_code") else "không mã")
+            print(f"  - {m['class_name']}->{m['name']} : {code}")
+        if args.o:
+            p = Path(args.o)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(rep, ensure_ascii=False, indent=2),
+                         encoding="utf-8")
+            print("[patchx] Đã ghi JSON:", p)
+        return 0
+    rep = apply_dex_method_patch(
+        dex, args.method or ".", args.swap.split("=", 1)[0],
+        args.swap.split("=", 1)[1], backup_dir=args.backup,
+        dry_run=not args.apply)
+    if rep.get("changed"):
+        print(f"{C.GRN}Đã tìm {rep['hits']} vị trí khớp{C.RST} · "
+              f"dry_run={rep['dry_run']}")
+        for m in rep.get("matches", []):
+            print(f"  - {m['class']}->{m['method']} @ offset {m['offset']}")
+    else:
+        print(f"{C.YEL}{rep.get('reason', 'không thay đổi')}{C.RST}")
+    if args.o:
+        p = Path(args.o)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(rep, ensure_ascii=False, indent=2),
+                     encoding="utf-8")
+    return 0 if rep.get("changed") else 1
 
 
 def main(argv=None):
@@ -3180,30 +3766,42 @@ def main(argv=None):
     p.add_argument("--mode", default="auto", choices=["auto", "intake", "semantic", "fast", "behavior", "native", "combo", "gadget"], help="Chế độ pipeline")
     p.add_argument("-o", "--out", default=None, help="Đường dẫn APK đầu ra (nếu có)")
     p.add_argument("--output-dir", default=None, help="Thư mục xuất báo cáo (mặc định: outputs/pipeline)")
-    p.add_argument("--dex-str", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi DEX in-place")
-    p.add_argument("--dex-hex", action="append", default=[], metavar="HEX1=HEX2", help="Thay bytecode DEX in-place")
-    p.add_argument("--axml", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi AXML in-place")
-    p.add_argument("--arsc", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi ARSC in-place")
-    p.add_argument("--dry-run", action="store_true", help="Chạy thử không ghi APK")
-    p.add_argument("--auto-patch", action="store_true", help="Tự động vá Smali cho behavior stage")
-    p.add_argument("--build-apk", action="store_true", help="Build APK sau khi vá")
+    p.add_argument("--dex-str", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi trong ruột tệp mã máy DEX trực tiếp")
+    p.add_argument("--dex-hex", action="append", default=[], metavar="HEX1=HEX2", help="Thay mã lệnh nhị phân DEX trực tiếp")
+    p.add_argument("--axml", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi trong tệp khai báo XML nhị phân trực tiếp")
+    p.add_argument("--arsc", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi trong bảng tài nguyên nhị phân trực tiếp")
+    p.add_argument("--dry-run", action="store_true", help="Chạy thử không ghi tệp ứng dụng")
+    p.add_argument("--auto-patch", action="store_true", help="Tự động sửa mã trung gian cho chặng phân tích hành vi")
+    p.add_argument("--build-apk", action="store_true", help="Đóng gói ứng dụng sau khi sửa")
     p.set_defaults(func=cmd_pipeline)
 
-    p = sub.add_parser("macro-list", help="Liệt kê Smali macro và yêu cầu register")
-    p.add_argument("--registers", type=int, default=2, help="Số register dự kiến")
+    p = sub.add_parser("dag", help="Quản lý sơ đồ điều phối thứ tự công việc và sổ bộ quy trình mẫu")
+    p.add_argument("--list", action="store_true", help="Liệt kê danh sách quy trình mẫu và các bước trong sổ bộ")
+    p.add_argument("--inspect", metavar="NAME", help="Xem chi tiết cấu trúc sơ đồ và các tầng thực hiện độc lập của quy trình")
+    p.add_argument("--mermaid", metavar="NAME", help="Xuất mã sơ đồ hình ảnh Mermaid Markdown của quy trình")
+    p.add_argument("--run", metavar="NAME", help="Khởi chạy quy trình được chỉ định")
+    p.add_argument("artifact", nargs="?", default=None, help="Tệp ứng dụng APK/AAB khi chạy --run")
+    p.add_argument("-o", "--output-dir", default=None, help="Thư mục xuất kết quả")
+    p.add_argument("--dry-run", action="store_true", help="Chạy thử mô phỏng không biến đổi dữ liệu")
+    p.add_argument("--export-all", nargs="?", const="outputs/pipeline/dag", metavar="DIR", help="Xuất toàn bộ tài liệu sơ đồ và quy trình ra thư mục")
+    p.add_argument("--export", nargs="?", const="outputs/pipeline/dag", metavar="DIR", help="Xuất toàn bộ tài liệu sơ đồ và quy trình")
+    p.set_defaults(func=cmd_dag)
+
+    p = sub.add_parser("macro-list", help="Liệt kê danh sách macro mã trung gian và yêu cầu thanh ghi")
+    p.add_argument("--registers", type=int, default=2, help="Số thanh ghi dự kiến")
     p.set_defaults(func=cmd_macro_list)
 
-    p = sub.add_parser("dex-patch", help="Patch chuỗi và bytecode DEX trực tiếp, không qua apktool")
+    p = sub.add_parser("dex-patch", help="Sửa trực tiếp chuỗi và mã lệnh DEX, không qua công cụ rã tệp cồng kềnh")
     p.add_argument("dex", help="Tệp classes*.dex")
-    p.add_argument("--replace", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi UTF-8 in-place; có thể lặp lại")
-    p.add_argument("--replace-hex", action="append", default=[], metavar="TARGET=REPL", help="Thay opcode/bytecode hex in-place (vd: 12000f00=12100f00)")
-    p.add_argument("--backup", default=None, help="Thư mục backup")
-    p.add_argument("--dry-run", action="store_true", help="Chỉ kiểm tra hit, không ghi tệp")
+    p.add_argument("--replace", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi trực tiếp; có thể lặp lại")
+    p.add_argument("--replace-hex", action="append", default=[], metavar="TARGET=REPL", help="Thay mã lệnh nhị phân trực tiếp (ví dụ: 12000f00=12100f00)")
+    p.add_argument("--backup", default=None, help="Thư mục sao lưu an toàn")
+    p.add_argument("--dry-run", action="store_true", help="Chỉ kiểm tra vị trí tìm thấy, không ghi đè tệp")
     p.set_defaults(func=cmd_dex_patch)
 
-    p = sub.add_parser("apk-repack-fast", help="Repack APK chỉ với entry thay đổi")
-    p.add_argument("apk", help="APK gốc")
-    p.add_argument("-o", "--output", required=True, help="APK đầu ra mới")
+    p = sub.add_parser("apk-repack-fast", help="Đóng gói APK siêu tốc chỉ với các thành phần có thay đổi")
+    p.add_argument("apk", help="Tệp APK gốc")
+    p.add_argument("-o", "--output", required=True, help="Tệp APK xuất xưởng mới")
     p.add_argument("--update", action="append", default=[], metavar="ENTRY=FILE", help="Entry APK và file thay thế")
     p.add_argument("--dry-run", action="store_true", help="Chỉ kiểm tra tham số, không tạo APK")
     p.set_defaults(func=cmd_apk_repack_fast)
@@ -3216,6 +3814,7 @@ def main(argv=None):
     p.add_argument("--axml", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi trong AndroidManifest.xml (auto UTF-8/UTF-16)")
     p.add_argument("--arsc", action="append", default=[], metavar="OLD=NEW", help="Thay chuỗi trong resources.arsc (auto UTF-8/UTF-16)")
     p.add_argument("--no-strip", action="store_true", help="Không tự động gỡ file chữ ký cũ trong META-INF")
+    p.add_argument("--dag", action="store_true", help="Chạy quy trình vá siêu tốc qua động cơ điều phối DAG")
     p.set_defaults(func=cmd_fast_patch)
 
     p = sub.add_parser("arsc-patch", help="Phân tích và thay thế chuỗi trong bảng tài nguyên resources.arsc")
@@ -3428,6 +4027,7 @@ def main(argv=None):
     p.add_argument("--strict", action="store_true", help="Dừng nếu lỗi nhẹ")
     p.add_argument("--quiet", action="store_true", help="In ít thông tin")
     p.add_argument("--reset-state", action="store_true", help="Xóa trạng thái áp trước đó")
+    p.add_argument("--dag", action="store_true", help="Ủy quyền điều phối tự động qua DAG")
     p.set_defaults(func=cmd_apply)
 
     p = sub.add_parser("test", help="Chạy bộ kiểm tra nội bộ")
@@ -3493,6 +4093,7 @@ def main(argv=None):
     p.add_argument("cay_apk", help="Thư mục APK đã giải mã")
     p.add_argument("-o", default=None, help="Ghi JSON")
     p.add_argument("--top", type=int, default=15, help="Số class top call-graph")
+    p.add_argument("--dag", action="store_true", help="Chạy phân tích sâu tự động qua DAG")
     p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("model", help="Tạo mô hình trung gian app_model.json")
@@ -3569,91 +4170,200 @@ def main(argv=None):
     p.set_defaults(func=cmd_remote_observe)
 
 
-    p = sub.add_parser("rodata-find", help="Tìm RVA của chuỗi trong .rodata/.data của file .so")
-    p.add_argument("so", help="File .so/.elf cần quét")
-    p.add_argument("--string", default=None, help="Chuỗi cần tìm (bỏ trống để liệt kê section ALLOC)")
-    p.add_argument("--all", action="store_true", help="Bao gồm cả vị trí ngoài vùng ánh xạ")
-    p.add_argument("-o", default=None, help="Ghi kết quả JSON")
+    p = sub.add_parser("rodata-find", help="Tìm vị trí tương đối (địa chỉ bộ nhớ) của chuỗi trong tệp mã máy .so")
+    p.add_argument("so", help="Tệp thư viện mã máy .so/.elf cần quét")
+    p.add_argument("--string", default=None, help="Chuỗi cần tìm (để trống để liệt kê toàn bộ vùng nhớ được cấp phát)")
+    p.add_argument("--all", action="store_true", help="Bao gồm cả các vị trí nằm ngoài vùng nhớ ánh xạ")
+    p.add_argument("-o", default=None, help="Ghi kết quả ra tệp dữ liệu JSON")
     p.set_defaults(func=cmd_rodata_find)
 
-    p = sub.add_parser("rodata-patch", help="Sinh script Frida patch chuỗi trong .rodata trên RAM")
-    p.add_argument("so", help="File .so/.elf gốc (dùng để tự tìm RVA khi có --string)")
-    p.add_argument("--string", default=None, help="Chuỗi gốc cần thay (tự tìm RVA; nhiều vị trí thì dùng --offset)")
+    p = sub.add_parser("rodata-patch", help="Tạo tập lệnh can thiệp tạm thời để thay đổi chuỗi trong bộ nhớ RAM khi ứng dụng chạy")
+    p.add_argument("so", help="Tệp thư viện mã máy gốc (dùng để tự động tính toán vị trí chuỗi)")
+    p.add_argument("--string", default=None, help="Chuỗi gốc cần thay thế (tự động dò tìm vị trí; nhiều vị trí thì dùng --offset)")
     p.add_argument("--new", dest="new_string", default=None, help="Chuỗi mới (độ dài tùy ý)")
-    p.add_argument("--offset", default=None, help="RVA chuỗi gốc từ IDA/Ghidra (vd 0x1A2B3) — bỏ qua bước tìm")
-    p.add_argument("--ptr-offset", dest="ptr_offset", default=None, help="RVA ô nhớ đang giữ con trỏ tới chuỗi (mode pointer)")
-    p.add_argument("--module", default=None, help="Tên module .so khi nạp (mặc định lấy tên file .so)")
+    p.add_argument("--offset", default=None, help="Địa chỉ bộ nhớ tương đối của chuỗi gốc (ví dụ: 0x1A2B3) — bỏ qua bước tìm kiếm")
+    p.add_argument("--ptr-offset", dest="ptr_offset", default=None, help="Địa chỉ ô nhớ đang giữ con trỏ trỏ tới chuỗi (chế độ pointer)")
+    p.add_argument("--module", default=None, help="Tên tệp thư viện khi nạp vào bộ nhớ (mặc định lấy theo tên tệp)")
     p.add_argument("--mode", choices=["inline", "pointer", "both"], default="both",
-                   help="inline=ghi đè trực tiếp; pointer=đổi con trỏ (an toàn, độ dài vô hạn)")
+                   help="inline=ghi đè tại chỗ; pointer=đổi con trỏ (an toàn, độ dài tùy ý)")
     p.add_argument("--runtime-scan", dest="runtime_scan", action="store_true",
-                   help="Quét RAM module tìm old_string rồi ghi inline (không cần RVA tĩnh)")
+                   help="Quét bộ nhớ khi ứng dụng đang chạy để tìm chuỗi cũ rồi sửa tại chỗ (không cần địa chỉ tĩnh)")
     p.add_argument("--allow-overflow", dest="allow_overflow", action="store_true",
-                   help="Cho phép inline ghi dài hơn dung lượng chuỗi cũ (rủi ro tràn dữ liệu kế bên)")
+                   help="Cho phép ghi đè chuỗi dài hơn chuỗi cũ (có rủi ro đè dữ liệu liền kề)")
     p.add_argument("--no-restore", dest="no_restore", action="store_true",
-                   help="Không khôi phục quyền trang sau khi ghi")
-    p.add_argument("--config", default=None, help="File JSON config nhiều patch "
-                   '({"patches": [...], "module": "..."} hoặc list)')
-    p.add_argument("-o", default=None, help="File JS đầu ra (mặc định outputs/behavior/rodata_patch.js)")
+                   help="Không phục hồi quyền bộ nhớ sau khi ghi")
+    p.add_argument("--config", default=None, help="Tệp cấu hình JSON chứa nhiều mục cần sửa đổi cùng lúc")
+    p.add_argument("-o", default=None, help="Tệp tập lệnh can thiệp xuất ra (mặc định outputs/behavior/rodata_patch.js)")
     p.set_defaults(func=cmd_rodata_patch)
 
 
-    p = sub.add_parser("rodata-apply", help="Chèn chuỗi TRỰC TIẾP vào file .so (patch file, không cần Frida)")
-    p.add_argument("so", help="File .so/.elf cần patch (có backup trước khi ghi)")
-    p.add_argument("--string", default=None, help="Chuỗi gốc cần thay (tự tìm RVA; nhiều vị trí thì dùng --offset)")
-    p.add_argument("--new", dest="new_string", default=None, help="Chuỗi mới — KHÔNG được dài hơn chuỗi cũ (giới hạn patch file)")
-    p.add_argument("--offset", default=None, help="RVA chuỗi gốc (vd 0x1A2B3) — bỏ qua bước tìm")
+    p = sub.add_parser("rodata-apply", help="Ghi đè chuỗi trực tiếp vào tệp mã máy trên đĩa (sửa tệp vĩnh viễn, có tự động sao lưu)")
+    p.add_argument("so", help="Tệp thư viện mã máy .so/.elf cần sửa (tự động sao lưu an toàn trước khi ghi)")
+    p.add_argument("--string", default=None, help="Chuỗi gốc cần thay thế (tự động dò tìm vị trí; nhiều vị trí thì dùng --offset)")
+    p.add_argument("--new", dest="new_string", default=None, help="Chuỗi mới — KHÔNG được dài hơn chuỗi cũ để bảo đảm an toàn tệp")
+    p.add_argument("--offset", default=None, help="Địa chỉ bộ nhớ tương đối của chuỗi gốc (ví dụ: 0x1A2B3) — bỏ qua bước tìm kiếm")
     p.add_argument("--allow-overflow", dest="allow_overflow", action="store_true",
-                   help="Cho phép ghi dài hơn dung lượng (rủi ro phá cấu trúc file)")
+                   help="Cho phép ghi dài hơn độ dài cũ (có rủi ro làm hỏng cấu trúc tệp)")
     p.add_argument("--no-backup", dest="no_backup", action="store_true",
-                   help="Không tạo bản backup (mặc định lưu outputs/backup/rodata_apply/)")
+                   help="Không tạo bản sao lưu dự phòng")
     p.add_argument("--backup-dir", dest="backup_dir", default=None,
-                   help="Thư mục backup (mặc định outputs/backup/rodata_apply/)")
-    p.add_argument("--config", default=None, help="File JSON config nhiều patch "
-                   '({"patches": [...]} hoặc list)')
+                   help="Thư mục lưu bản sao lưu (mặc định outputs/backup/rodata_apply/)")
+    p.add_argument("--config", default=None, help="Tệp cấu hình JSON chứa nhiều mục cần sửa đổi cùng lúc")
     p.add_argument("--out", default=None,
-                   help="Ghi bản đã patch ra file mới thay vì ghi đè file gốc")
+                   help="Xuất ra tệp mã máy mới thay vì ghi đè trực tiếp lên tệp gốc")
     p.set_defaults(func=cmd_rodata_apply)
 
 
     p = sub.add_parser("smart-scan",
-                       help="Quét chuỗi .rodata/.data thông minh: lọc nhiễu + "
-                            "data-flow + xác thực chéo + Confidence Score 0-100")
-    p.add_argument("so", nargs="?", help="File .so/.elf cần quét (bỏ trống khi dùng --behaviors)")
+                       help="Quét chuỗi nhị phân thông minh: lọc rác + dò luồng dữ liệu + kiểm tra chéo + tính điểm tin cậy 0-100")
+    p.add_argument("so", nargs="?", help="Tệp thư viện mã máy .so/.elf cần quét (bỏ trống khi dùng --behaviors)")
     p.add_argument("--min-len", type=int, default=6,
-                   help="Độ dài tối thiểu chuỗi (mặc định 6)")
+                   help="Độ dài tối thiểu của chuỗi cần lấy (mặc định 6)")
     p.add_argument("--min-risk", type=int, default=0,
-                   help="Chỉ giữ finding có risk >= giá trị này (mặc định 0)")
+                   help="Chỉ giữ lại các chuỗi có mức độ rủi ro lớn hơn hoặc bằng giá trị này (mặc định 0)")
     p.add_argument("--show-noise", action="store_true",
-                   help="Kèm danh sách chuỗi đã lọc nhiễu vào báo cáo")
+                   help="Kèm danh sách các chuỗi rác đã bị lọc bỏ vào báo cáo")
     p.add_argument("--no-refs", dest="scan_refs", action="store_false",
-                   help="Tắt truy vết tham chiếu tĩnh (data-flow)")
+                   help="Tắt tính năng truy vết tham chiếu dòng lệnh tới chuỗi")
     p.add_argument("-o", default=None,
-                   help="File JSON đầu ra (mặc định outputs/behavior/smart_scan/)")
-    p.add_argument("--md", default=None, help="File Markdown đầu ra (mặc định kèm theo JSON)")
+                   help="Tệp JSON báo cáo kết quả (mặc định outputs/behavior/smart_scan/)")
+    p.add_argument("--md", default=None, help="Tệp Markdown báo cáo kết quả (mặc định kèm theo JSON)")
     p.add_argument("--behaviors", action="store_true",
-                   help="In từ điển hành vi (giống ontology.py) rồi thoát")
+                   help="In bảng từ điển phân loại hành vi rồi thoát")
+    p.add_argument("--native", dest="native", action="store_true", default=None,
+                   help="Bắt buộc dùng đường quét NEON native (mặc định: tự dùng nếu biên dịch được)")
+    p.add_argument("--no-native", dest="native", action="store_false",
+                   help="Tắt đường NEON, quét bằng Python thuần")
+    p.add_argument("--benchmark", type=int, nargs="?", const=32, metavar="MB",
+                   help="Chạy đo tốc độ GB/s thật NEON vs Python trên khối dữ liệu cỡ này rồi thoát")
+    p.add_argument("--jni", action="store_true",
+                   help="Phân tích thêm bảng RegisterNatives (JNINativeMethod) trong .so: tên, chữ ký, con trỏ hàm")
+    p.add_argument("--jni-frida", default=None, metavar="FILE",
+                   help="Ghi kịch bản Frida hook theo RVA của các hàm JNI phát hiện được")
     p.set_defaults(func=cmd_smart_scan)
 
 
     p = sub.add_parser(
         "start-scan", aliases=["start_scan"],
-        help="Quét TOÀN BỘ lib .so trong APK/thư mục/file — báo cáo tổng hợp "
-             "(start-scan = native .so; behavior = smali)")
-    p.add_argument("target", help="APK, thư mục chứa .so, hoặc file .so")
+        help="Quét toàn bộ thư viện mã máy trong APK/thư mục và lập báo cáo tổng hợp")
+    p.add_argument("target", help="Tệp APK, thư mục chứa thư viện, hoặc tệp .so đơn lẻ")
     p.add_argument("--abi", default=None,
-                   help="Chỉ quét ABI (vd arm64-v8a, armeabi-v7a) khi đầu vào là APK")
+                   help="Chỉ quét kiến trúc CPU chỉ định (ví dụ: arm64-v8a, armeabi-v7a) khi đầu vào là APK")
     p.add_argument("--min-len", type=int, default=6,
-                   help="Độ dài tối thiểu chuỗi (mặc định 6)")
-    p.add_argument("--min-risk", type=int, default=0,
-                   help="Chỉ giữ finding có risk >= giá trị này (mặc định 0)")
+                   help="Độ dài tối thiểu của chuỗi cần lấy (mặc định 6)")
+    p.add_argument("--min-risk", type=int, default=60,
+                   help="Chỉ giữ lại các chuỗi có mức độ rủi ro lớn hơn hoặc bằng giá trị này (mặc định 60)")
     p.add_argument("--show-noise", action="store_true",
-                   help="Kèm danh sách chuỗi đã lọc nhiễu vào báo cáo")
+                   help="Kèm danh sách các chuỗi rác đã bị lọc bỏ vào báo cáo")
     p.add_argument("--keep-so", dest="keep_so", action="store_true",
-                   help="Giữ lib đã trích tại outputs/behavior/smart_scan/so_extract/")
+                   help="Giữ lại các tệp thư viện đã trích xuất tại outputs/behavior/smart_scan/so_extract/")
+    p.add_argument("--native", dest="native", action="store_true", default=None,
+                   help="Bắt buộc dùng đường quét NEON native (mặc định: tự dùng nếu biên dịch được)")
+    p.add_argument("--no-native", dest="native", action="store_false",
+                   help="Tắt đường NEON, quét bằng Python thuần")
     p.add_argument("-o", default=None,
-                   help="File JSON đầu ra (mặc định outputs/behavior/smart_scan/)")
-    p.add_argument("--md", default=None, help="File Markdown đầu ra (mặc định kèm theo JSON)")
+                   help="Tệp JSON báo cáo kết quả (mặc định outputs/behavior/smart_scan/)")
+    p.add_argument("--md", default=None, help="Tệp Markdown báo cáo kết quả (mặc định kèm theo JSON)")
     p.set_defaults(func=cmd_start_scan)
+
+
+    p = sub.add_parser("neon-bench",
+                       help="Đo tốc độ GB/s thật của đường quét NEON ARM64 so với Python thuần")
+    p.add_argument("--size-mb", type=int, default=64,
+                   help="Cỡ khối dữ liệu thử (MB, mặc định 64)")
+    p.add_argument("--needle", default="/system/bin/su",
+                   help="Mẫu byte cần tìm trong phép đo mẫu chính xác")
+    p.add_argument("--iterations", type=int, default=3,
+                   help="Số vòng lặp đo để lấy trung bình")
+    p.add_argument("-o", default=None, help="Tệp JSON ghi kết quả đo")
+    p.set_defaults(func=cmd_neon_bench)
+
+
+    p = sub.add_parser("integrity-decouple", help="Triệt tiêu 4 tầng kiểm soát toàn vẹn (Smali AST + DEX digest + Native + Play Integrity)")
+    p.add_argument("target", help="Cây Smali / tệp .smali / APK cần phân tích")
+    p.add_argument("--orig-apk", default=None, help="APK gốc để trích chữ ký (bắt buộc cho tầng Native)")
+    p.add_argument("--new-apk", default=None, help="APK đã can thiệp để đồng bộ mã băm chữ ký Native")
+    p.add_argument("--so-dir", default=None, help="Thư mục chứa lib .so đã giải nén")
+    p.add_argument("--spearheads", default="all", help="Danh sách mũi nhọn 1-4 cách nhau dấu phẩy (mặc định all)")
+    p.add_argument("--dry-run", action="store_true", help="Chỉ phân tích, không ghi tệp")
+    p.add_argument("-o", "--output-dir", default="outputs/integrity_decoupler", help="Thư mục xuất báo cáo và hook")
+    p.set_defaults(func=cmd_integrity_decouple)
+
+
+    p = sub.add_parser("autopilot", help="Điều phối tự hành 1-chạm: triage -> xác minh toàn vẹn -> báo cáo")
+    p.add_argument("target", help="APK hoặc cây APK đã giải mã")
+    p.add_argument("--orig-apk", default=None, help="APK gốc để trích chữ ký (tầng Native)")
+    p.add_argument("--new-apk", default=None, help="APK đã can thiệp để đồng bộ hash Native")
+    p.add_argument("--so-dir", default=None, help="Thư mục lib .so")
+    p.add_argument("--spearheads", default="all", help="Danh sách mũi nhọn 1-4 cách nhau dấu phẩy (mặc định all)")
+    p.add_argument("--dry-run", action="store_true", help="Chỉ phân tích, không ghi tệp")
+    p.add_argument("--network", action="store_true", help="Bật bước vô hiệu hóa NSC/SSL pinning (tầng mạng)")
+    p.add_argument("--native-patch", action="store_true", help="Bật bước đột biến zero-drift trên .so (tầng native)")
+    p.add_argument("--decompile", action="store_true",
+                   help="Giải mã APK bằng apktool để chạy đủ các bước sửa mã trung gian")
+    p.add_argument("--unflatten", action="store_true",
+                   help="Bật bước gỡ phẳng luồng mã và cắt tỉa khối chết trên cây đã giải mã")
+    p.add_argument("--unflatten-limit", type=int, default=0,
+                   help="Giới hạn số phương thức gỡ phẳng (0 = không giới hạn)")
+    p.add_argument("--no-package", dest="package", action="store_false",
+                   help="Bỏ bước đóng gói và ký số (chỉ phân tích và vá)")
+    p.add_argument("--package", dest="package", action="store_true", default=True,
+                   help="Bật bước đóng gói và ký số sau khi vá (mặc định bật)")
+    p.add_argument("-o", "--output-dir", default=None, help="Thư mục xuất báo cáo")
+    p.set_defaults(func=cmd_autopilot)
+
+
+    p = sub.add_parser("unflatten",
+                       help="Gỡ phẳng luồng mã bị làm rối kiểu switch-case và cắt tỉa khối chết (có sao lưu)")
+    p.add_argument("target", help="Tệp .smali hoặc cây smali")
+    p.add_argument("--apply", action="store_true",
+                   help="Ghi thật vào tệp (tự sao lưu .bak vào outputs/backup/unflatten/); mặc định chỉ phân tích")
+    p.add_argument("--limit", type=int, default=0,
+                   help="Giới hạn số phương thức xử lý khi quét cây (0 = không giới hạn)")
+    p.add_argument("--min-cases", type=int, default=2,
+                   help="Số nhánh case tối thiểu để coi là bị làm phẳng (mặc định 2)")
+    p.add_argument("--backup-root", default=None,
+                   help="Thư mục gốc chứa bản sao lưu (mặc định outputs/backup/unflatten/)")
+    p.add_argument("-o", default=None, help="Tệp JSON báo cáo")
+    p.set_defaults(func=cmd_unflatten)
+
+
+    p = sub.add_parser("integrity-gate",
+                       help="Một cổng kiểm tra toàn vẹn xuyên tầng (G1 vân tay, G2 cấu trúc, G3 ngữ nghĩa, G4 hành vi, G5 chống đạt giả)")
+    p.add_argument("target", help="Tệp .smali/.dex/.so/APK hoặc cây APK đã giải mã")
+    p.add_argument("--layer", default=None, help="Tầng kiểm (tự nhận diện nếu bỏ trống)")
+    p.add_argument("--g3-method", dest="g3_method", default=None,
+                   help="Thân phương thức smali để kiểm chứng ngữ nghĩa (G3)")
+    p.add_argument("--g3-expected", dest="g3_expected", default="true",
+                   help="Giá trị trả về kỳ vọng (true/false)")
+    p.add_argument("-o", default=None, help="Tệp JSON kết quả")
+    p.set_defaults(func=cmd_integrity_gate)
+
+
+    p = sub.add_parser("ast-dsl",
+                       help="Vá ngữ nghĩa bằng ngôn ngữ quy tắc trên cây AST Smali (tìm mẫu -> ràng buộc -> biến đổi -> in lại smali hợp lệ)")
+    p.add_argument("target", help="Tệp .smali hoặc cây smali")
+    p.add_argument("--rules", required=True,
+                   help="Tệp JSON danh sách quy tắc (mảng hoặc đối tượng có khóa 'quy_tac')")
+    p.add_argument("--apply", action="store_true",
+                   help="Ghi thật vào tệp (tự sao lưu .bak); mặc định chỉ phân tích")
+    p.add_argument("--output-dir", default=None,
+                   help="Khi chỉ phân tích: ghi bản dự kiến ra thư mục này (không sửa cây gốc)")
+    p.add_argument("-o", default=None, help="Tệp JSON báo cáo")
+    p.set_defaults(func=cmd_ast_dsl)
+
+
+    p = sub.add_parser("dex-method",
+                       help="Trình sửa DEX ở mức phương thức: xem bản đồ tên->lệnh hoặc vá opcode cùng độ dài (tự tính lại chữ ký)")
+    p.add_argument("dex", help="Tệp classes*.dex")
+    p.add_argument("--map", action="store_true", help="In bản đồ phương thức (không sửa)")
+    p.add_argument("--method", default=None, help="Lọc phương thức theo regex tên")
+    p.add_argument("--swap", default=None, metavar="HEX_CU=HEX_MOI",
+                   help="Thay mẫu lệnh hex cùng độ dài byte trong phương thức khớp")
+    p.add_argument("--apply", action="store_true", help="Ghi thật (có sao lưu); mặc định chỉ phân tích")
+    p.add_argument("--backup", default="outputs/backup/dex-method", help="Thư mục sao lưu khi --apply")
+    p.add_argument("-o", default=None, help="Tệp JSON báo cáo")
+    p.set_defaults(func=cmd_dex_method)
 
 
     p = sub.add_parser("menu", help="Danh sách chức năng chọn pipeline (menu có nhóm + sắp xếp)")
@@ -3737,6 +4447,36 @@ def main(argv=None):
     p = sub.add_parser("clean", help="Dọn dẹp tệp/thư mục tạm")
     p.add_argument("thu_muc", help="Thư mục gốc")
     p.set_defaults(func=cmd_clean)
+
+    p = sub.add_parser("precompile", help="Tiền biên dịch bytecode Python tối ưu trên 8 nhân CPU")
+    p.add_argument("-j", "--workers", type=int, default=None, help="Số nhân CPU thực thi song song")
+    p.add_argument("-O", "--optimize", type=int, default=1, choices=[0, 1, 2], help="Mức tối ưu hóa bytecode (0, 1, 2)")
+    p.set_defaults(func=cmd_precompile)
+
+    p = sub.add_parser("packet", help="Bộ công cụ an ninh mạng gói tin: guard | forge | arena | middleware")
+    p.add_argument("tool", choices=["guard", "forge", "arena", "middleware"], help="Công cụ cần chạy")
+    p.add_argument("tool_args", nargs=argparse.REMAINDER, help="Tham số phụ của công cụ đã chọn")
+    p.set_defaults(func=cmd_packet)
+
+    p = sub.add_parser("auto-gate", help="Tự động can thiệp các cổng an ninh bằng Smali AST Mutator và Micro-DEX Emulator")
+    p.add_argument("tree", help="Thư mục cây APK đã giải mã")
+    p.add_argument("--min-confidence", type=float, default=75.0, help="Ngưỡng tin cậy tối thiểu (mặc định: 75.0%%)")
+    p.add_argument("--max-gates", type=int, default=50, help="Số lượng cổng tối đa cần quét (mặc định: 50)")
+    p.add_argument("--no-backup", action="store_true", help="Không tạo tệp sao lưu .bak")
+    p.set_defaults(func=cmd_auto_gate)
+
+    p = sub.add_parser("network-bypass", help="Đột phá tầng mạng: mở khóa NSC, Cleartext và sinh tập lệnh vô hiệu hóa SSL Pinning đa tầng")
+    p.add_argument("target", help="Đường dẫn APK hoặc thư mục cây APK")
+    p.add_argument("-o", "--output-dir", default="outputs/network_bypass", help="Thư mục xuất báo cáo và tập lệnh")
+    p.add_argument("--no-cleartext", action="store_true", help="Không can thiệp NSC và Cleartext traffic")
+    p.add_argument("--no-ssl-script", action="store_true", help="Không sinh tập lệnh Frida SSL Pinning Nullifier")
+    p.set_defaults(func=cmd_network_bypass)
+
+    p = sub.add_parser("native-auto-patch", help="Đột phá tầng thư viện: quét và đột biến nhị phân zero-drift vô hiệu hóa chốt chặn Native C/C++")
+    p.add_argument("target", help="Đường dẫn tệp .so hoặc thư mục/cây chứa .so")
+    p.add_argument("-o", "--output-dir", default="outputs/native_mutator", help="Thư mục xuất kết quả")
+    p.add_argument("--dry-run", action="store_true", help="Chỉ quét và sinh tập lệnh Frida, không sửa trực tiếp file .so")
+    p.set_defaults(func=cmd_native_auto_patch)
 
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):

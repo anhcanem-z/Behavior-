@@ -47,14 +47,15 @@ PLATFORM_BY_ID = {
     "rodata-bypass-ui": "native", "smart-scan": "native", "start-scan": "native",
     "behavior-pipeline": "smali", "smart-patch": "smali",
     "remote-control": "smali",
-    "analyze-model": "smali", "targets": "smali", "targets-fused": "smali",
+    "analyze-model": "smali", "targets": "smali",
     "gadget-pipeline": "chung", "apk-prepare": "chung",
     "scan-index": "chung", "audit": "chung", "selfcheck-test": "chung",
     "upgrade-combo": "chung", "apply-patch": "chung", "apk-build": "chung",
     "apk-full": "chung", "coverage-roadmap": "chung", "simulate": "chung",
     "ci-golden": "chung",
     "unified-pipeline": "chung", "fast-patch": "smali",
-    "native-sig-bypass": "native", "intake-triage": "chung", "smart-combo": "chung",
+    "native-sig-bypass": "native", "intake-triage": "chung",
+    "targets-fused": "smali", "smart-combo": "chung", "dag-pipeline": "chung",
 }
 PLATFORM_ORDER = {"native": 0, "smali": 1, "chung": 2}
 PLATFORM_LABEL = {"native": "NATIVE (.so/.elf)", "smali": "SMALI (DEX/APK)",
@@ -121,17 +122,6 @@ FEATURE_GROUPS: List[Dict[str, Any]] = [
                             "dynamic: script Frida (mặc định outputs/behavior/rodata_patch.js)"],
                 "keywords": ["riêng", "bypass", "menu", "static", "dynamic",
                              "rodata_bypass", "rodata_bypass_main"],
-            },
-            {
-                "id": "native-sig-bypass",
-                "name": "Bypass chữ ký Native SHA-256 (.so cert spoof)",
-                "desc": "Tự động quét và thay thế hash cert SHA-256 trong các file .so sang cert debug, vượt qua kiểm tra chữ ký ở tầng native C/C++.",
-                "pipeline": [
-                    "{PY} patchx native-sig-bypass {APK}",
-                ],
-                "inputs": ["{APK}=file APK cần bypass chữ ký native"],
-                "outputs": ["các file .so đã patch SHA-256 hash và backup"],
-                "keywords": ["native", "sig", "bypass", "sha256", "cert", "so", "signature"],
             },
         ],
     },
@@ -250,17 +240,6 @@ FEATURE_GROUPS: List[Dict[str, Any]] = [
                 "inputs": ["{TREE}=cây APK"],
                 "outputs": ["danh sách target in ra màn hình"],
                 "keywords": ["target", "điểm", "sửa", "class", "method", "bằng chứng"],
-            },
-            {
-                "id": "targets-fused",
-                "name": "Hợp nhất mục tiêu kép (Behavior + Security Gates)",
-                "desc": "Hợp nhất đa chiều giữa Taint Flow rẽ nhánh (Zero-Workkey) và Ontology hành vi để phân hạng mục tiêu can thiệp (DUAL_CONFIRMED, SECURITY_GATE, BEHAVIOR_TARGET).",
-                "pipeline": [
-                    "{PY} patchx targets-fused {TREE}",
-                ],
-                "inputs": ["{TREE}=cây APK đã giải mã"],
-                "outputs": ["danh sách target hợp nhất kèm phân hạng và bằng chứng"],
-                "keywords": ["targets-fused", "fused", "hợp nhất", "taint", "security gates", "dual", "tier"],
             },
             {
                 "id": "smart-scan",
@@ -385,17 +364,6 @@ FEATURE_GROUPS: List[Dict[str, Any]] = [
                 "outputs": ["outputs/intake/intake_*.json", "outputs/intake/intake_*.md"],
                 "keywords": ["intake", "triage", "tiếp nhận", "kiểm tra", "split", "aab"],
             },
-            {
-                "id": "smart-combo",
-                "name": "Active Learning Smart Combo — Tự động sinh tổ hợp patch",
-                "desc": "Học hỏi từ lịch sử combo thành công để tự động sinh gói patch tối ưu cho APK đích, loại trừ xung đột.",
-                "pipeline": [
-                    "{PY} patchx smart-combo {APK}",
-                ],
-                "inputs": ["{APK}=file APK đích"],
-                "outputs": ["outputs/combos/smart_combo_*.zip"],
-                "keywords": ["smart-combo", "combo", "active learning", "học hỏi", "tổ hợp"],
-            },
         ],
     },
     {
@@ -449,13 +417,14 @@ FEATURE_GROUPS: List[Dict[str, Any]] = [
             },
             {
                 "id": "apk-full",
-                "name": "Luồng APK đầy đủ (Fast-Path + Security Gates + Sign)",
-                "desc": "Quy trình trọn gói tự động: Intake -> Security Gates -> In-place DEX/AXML/ARSC -> Native Sig Bypass -> Ký APK (thay thế quy trình apktool cũ).",
+                "name": "Luồng APK đầy đủ (patch + build + báo cáo)",
+                "desc": "apk-plan -> apk-test -> apk-patch -> apk-build -> verify; "
+                        "báo cáo tổng hợp.",
                 "pipeline": [
-                    "{PY} pushx apk-full {APK}",
+                    "{PY} patchx_toolkit.py apk-full {APK} --output outputs/apk/apk-full --patches-file outputs/apk/apk-full/selected_patches.json",
                 ],
                 "inputs": ["{APK}=file APK"],
-                "outputs": ["outputs/pipeline/pipeline_report.json/md", "APK đã vá và ký"],
+                "outputs": ["outputs/apk/apk-full/*_report.json/md", "APK đã ký"],
                 "keywords": ["full", "đầy đủ", "apk-full", "pipeline", "build",
                              "patch apk"],
             },

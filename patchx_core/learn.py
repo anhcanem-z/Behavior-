@@ -259,3 +259,37 @@ def save_smart_combo(merged_patch, output_path, header=None):
         fh.write(text)
     return output_path
 
+
+def suggest_active_learning_combo(artifact_path: str, collection=None, intent=None):
+    """Tự động học hỏi từ lịch sử (combos_success.json & KINH_NGHIEM_HOC_HOI.md)
+    và đề xuất tổ hợp bản vá tối ưu (Active Learning Combo) không xung đột.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if collection is None:
+        collection = os.path.join(root, "upgraded")
+        if not os.path.isdir(collection):
+            collection = os.path.join(root, "combos")
+
+    learned_intents = set()
+    kinh_nghiem_path = os.path.join(root, "KINH_NGHIEM_HOC_HOI.md")
+    if os.path.isfile(kinh_nghiem_path):
+        try:
+            with open(kinh_nghiem_path, "r", encoding="utf-8", errors="ignore") as fh:
+                kn_text = fh.read().lower()
+                for cap, kws in INTENT_KEYWORDS.items():
+                    if any(kw in kn_text for kw in kws):
+                        learned_intents.add(cap)
+        except Exception:
+            pass
+
+    effective_intent = intent
+    if not effective_intent and learned_intents:
+        effective_intent = " ".join(learned_intents)
+
+    return generate_smart_combo(
+        tree=artifact_path,
+        collection=collection,
+        intent=effective_intent,
+        max_patches=5,
+    )
+

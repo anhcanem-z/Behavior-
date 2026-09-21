@@ -815,8 +815,9 @@ def build_roadmap(collection_root, tree_root):
     cache.prepare_hints(collect_regex_hints(parsed))
     eng = Engine(tree_root, quiet=True, no_dex=True)
     eng._file_index = list(cache.inventory)
-    items = []
-    for p in parsed:
+    from .pool import run_parallel
+
+    def _eval_patch_worker(p):
         cov = coverage_patch_cached(p, tree_root, eng=eng, cache=cache)
         risk = []
         for sec in p.sections:
@@ -828,14 +829,16 @@ def build_roadmap(collection_root, tree_root):
                 risk.append("xoa tệp (co sao luu)")
         for rf in risk_findings(p):
             risk.append("⚠ %s: %s" % (rf["loại"], rf["nội_dung"]))
-        items.append({
+        return {
             "patch": p.name, "nhóm": cluster_tag(p.name),
             "tỷ_lệ": cov["tỷ_lệ"], "quy_tắc_khớp": cov["quy_tắc_khớp"],
             "quy_tắc": cov["quy_tắc"], "lần_khớp": sum(
                 d["khớp"] for d in cov["chi_tiết"]),
             "rui_ro": risk,
             "chi_tiết": cov["chi_tiết"],
-        })
+        }
+
+    items = run_parallel(_eval_patch_worker, parsed, max_workers=8)
     items.sort(key=lambda x: (-x["tỷ_lệ"], x["nhóm"]))
     return items
 

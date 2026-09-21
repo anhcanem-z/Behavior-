@@ -513,28 +513,77 @@ class BehaviorDetector:
     def scan(self):
         results = {}
 
-        files = self._iter_files()
+        files = list(self._iter_files())
 
-        for path in files:
-            self.stats["files"] += 1
+        if not files:
+            return []
 
-            try:
-                text = path.read_text(
-                    encoding="utf-8",
-                    errors="ignore",
-                )
-            except Exception:
-                self.stats["errors"] += 1
-                continue
+        if len(files) <= 10:
+            for path in files:
+                self.stats["files"] += 1
 
-            try:
-                self._scan_file(
-                    path,
-                    text,
-                    results,
-                )
-            except Exception:
-                self.stats["errors"] += 1
+                try:
+                    text = path.read_text(
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                except Exception:
+                    self.stats["errors"] += 1
+                    continue
+
+                try:
+                    self._scan_file(
+                        path,
+                        text,
+                        results,
+                    )
+                except Exception:
+                    self.stats["errors"] += 1
+        else:
+            from patchx_core.pool import run_parallel, get_cpu_cores
+
+            workers = get_cpu_cores()
+            chunk_sz = max(10, min(100, len(files) // (workers * 4) or 10))
+
+            def _scan_chunk(chunk_paths):
+                local_results = {}
+                local_stats = {
+                    "files": 0,
+                    "smali": 0,
+                    "sensitive_files": 0,
+                    "methods": 0,
+                    "cfg_methods": 0,
+                    "targets": 0,
+                    "errors": 0,
+                }
+                worker_det = BehaviorDetector(self.root)
+                worker_det.stats = local_stats
+                for p in chunk_paths:
+                    local_stats["files"] += 1
+                    try:
+                        t = p.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        local_stats["errors"] += 1
+                        continue
+                    try:
+                        worker_det._scan_file(p, t, local_results)
+                    except Exception:
+                        local_stats["errors"] += 1
+                return local_results, local_stats
+
+            chunk_outputs = run_parallel(
+                _scan_chunk, files, max_workers=workers, chunk_size=chunk_sz
+            )
+
+            for local_results, local_stats in chunk_outputs:
+                for k, v in local_stats.items():
+                    self.stats[k] = self.stats.get(k, 0) + v
+                for name, behavior in local_results.items():
+                    if name not in results:
+                        results[name] = behavior
+                    else:
+                        results[name].evidence.extend(behavior.evidence)
+                        results[name].suggestions.extend(behavior.suggestions)
 
         for name, behavior in results.items():
             if name in BEHAVIORS and "suggestions" in BEHAVIORS[name]:
@@ -722,6 +771,7 @@ class BehaviorDetector:
             if crypto_hit or feature_hit or token_hit:
                 self._scan_obfuscation_flow(path, text, results)
             self._scan_log_flow(path, text, results)
+            self._scan_native_bridge(path, text, results)
         elif suffix == ".xml":
             if feature_hit:
                 self._scan_pro_patterns(path, text, results)
@@ -1875,6 +1925,51 @@ class BehaviorDetector:
                         "line": self._line_number(text, match.start()),
                         "obfuscated": obfuscated_name,
                     },
+                )
+            )
+
+    def _scan_native_bridge(self, path, text, results):
+        """Quét cầu nối JNI Smali -> Native (.so) và khai báo phương thức native."""
+        if path.suffix.lower() != ".smali":
+            return
+
+        # 1. Tìm System.loadLibrary("xxx")
+        load_matches = re.finditer(
+            r'const-string\s+[vp]\d+,\s*"([^"]+)"[\s\r\n]+invoke-static\s+\{[^\}]+\},\s*Ljava/lang/System;->loadLibrary\(Ljava/lang/String;\)V',
+            text
+        )
+        loaded_lib = None
+        for m in load_matches:
+            loaded_lib = m.group(1)
+            behavior = self._get(results, "integrity_check")
+            behavior.add_evidence(
+                Evidence(
+                    kind="jni-native-library",
+                    value=f"System.loadLibrary(\"{loaded_lib}\")",
+                    source=str(path),
+                    weight=0.85,
+                    details={"library": loaded_lib, "line": self._line_number(text, m.start())},
+                )
+            )
+
+        # 2. Tìm khai báo .method ... native
+        native_matches = re.finditer(
+            r'\.method\s+(?:[a-z]+\s+)*native\s+([a-zA-Z0-9_$]+)\(([^\)]*)\)([^\s]+)',
+            text
+        )
+        for nm in native_matches:
+            method_name = nm.group(1)
+            params = nm.group(2)
+            ret = nm.group(3)
+            sig = f"{method_name}({params}){ret}"
+            behavior = self._get(results, "integrity_check")
+            behavior.add_evidence(
+                Evidence(
+                    kind="jni-native-method",
+                    value=f"native {sig}" + (f" -> [lib{loaded_lib}.so]" if loaded_lib else ""),
+                    source=str(path),
+                    weight=0.80,
+                    details={"method": method_name, "signature": sig, "library": loaded_lib, "line": self._line_number(text, nm.start())},
                 )
             )
 

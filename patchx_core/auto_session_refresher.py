@@ -99,9 +99,23 @@ class AutoSessionRefresher:
 
     def accept_mediaprojection_dialog(self) -> bool:
         """Tự động chọn 'Toàn bộ màn hình' và bấm 'Bắt đầu ngay' trên dialog Android 14/15."""
-        # 1. Thử dump UI để quét node
-        dump_cmd = "uiautomator dump /data/local/tmp/uidump.xml 2>/dev/null && cat /data/local/tmp/uidump.xml"
+        # 1. Thử dump UI để quét node (lưu vào outputs/tu-sinh/uidump.xml)
+        tu_sinh_dir = os.path.join(ROOT, "outputs", "tu-sinh")
+        os.makedirs(tu_sinh_dir, exist_ok=True)
+        dump_target = os.path.join(tu_sinh_dir, "uidump.xml")
+        dump_cmd = (
+            f"mkdir -p '{tu_sinh_dir}' 2>/dev/null; "
+            f"uiautomator dump '{dump_target}' 2>/dev/null && cat '{dump_target}' || "
+            "uiautomator dump /data/local/tmp/uidump.xml 2>/dev/null && cat /data/local/tmp/uidump.xml"
+        )
         rc, out, _ = self._exec_device(dump_cmd, timeout=8)
+        # Xóa sạch tệp tự sinh vô dụng ngay sau khi đã đọc xong nội dung
+        self._exec_device(f"rm -f '{dump_target}' /data/local/tmp/uidump.xml 2>/dev/null")
+        if os.path.isfile(dump_target):
+            try:
+                os.remove(dump_target)
+            except Exception:
+                pass
 
         handled = False
         if rc == 0 and out:

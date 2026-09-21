@@ -29,6 +29,9 @@ if BASE_DIR not in sys.path:
 LOG_SUBSCRIBERS = []
 LOG_BUFFER = []
 MAX_LOG_BUFFER = 150
+STATUS_HISTORY = []
+MAX_STATUS_HISTORY = 60
+SERVER_STARTED = time.time()
 
 
 def broadcast_log(level, message):
@@ -136,42 +139,7 @@ input::placeholder { color: #7785a3; }
 .log-window { height: 190px; overflow-y: auto; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: #080d19; }
 .log-line { margin-bottom: 4px; font: .78rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-word; }
 .log-time { color: #70809f; margin-right: 6px; }.log-INFO { color: var(--blue); }.log-SUCCESS { color: var(--green); }.log-WARN { color: var(--yellow); }.log-ERROR { color: var(--red); }
-.cfg-container { margin-top: 18px; }
-.cfg-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
-.cfg-metric-box { background: #0d1426; border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
-.cfg-metric-box .num { font-size: 1.3rem; font-weight: 800; color: var(--cyan); }
-.cfg-metric-box .lbl { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; }
-.cfg-samples { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-.cfg-sample-btn { background: rgba(84,184,255,0.1); border: 1px solid rgba(84,184,255,0.3); color: var(--blue); border-radius: 6px; padding: 5px 10px; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
-.cfg-sample-btn:hover { background: rgba(84,184,255,0.2); }
-.cfg-graph-canvas { background: #070c18; border: 1px solid var(--border); border-radius: 12px; padding: 18px; min-height: 280px; overflow-x: auto; position: relative; }
-.cfg-blocks-flow { display: flex; flex-direction: column; gap: 16px; align-items: center; max-width: 850px; margin: 0 auto; }
-.cfg-block-card { width: 100%; max-width: 680px; background: #0f172a; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.3); transition: border-color 0.2s, transform 0.2s; }
-.cfg-block-card:hover { transform: translateY(-2px); border-color: var(--blue); }
-.cfg-block-card.is-entry { border-left: 5px solid var(--green); }
-.cfg-block-card.is-exit { border-left: 5px solid var(--red); }
-.cfg-block-card.is-branch { border-left: 5px solid var(--yellow); }
-.cfg-block-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border); font-size: 0.82rem; font-weight: 700; }
-.cfg-badge { padding: 2px 7px; border-radius: 999px; font-size: 0.68rem; font-weight: 700; }
-.cfg-badge.entry { background: rgba(78,230,166,0.15); color: var(--green); }
-.cfg-badge.exit { background: rgba(255,123,143,0.15); color: var(--red); }
-.cfg-badge.branch { background: rgba(255,209,102,0.15); color: var(--yellow); }
-.cfg-ins-list { margin: 0; padding: 8px 12px; list-style: none; font: 0.78rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.cfg-ins-item { display: flex; gap: 10px; }
-.cfg-ins-line { color: #5a6b8c; flex: 0 0 28px; text-align: right; user-select: none; }
-.cfg-ins-text { color: #d0daf0; word-break: break-all; }
-.cfg-ins-text .label { color: var(--cyan); font-weight: bold; }
-.cfg-ins-text .branch-op { color: var(--yellow); font-weight: bold; }
-.cfg-ins-text .ret-op { color: var(--red); font-weight: bold; }
-.cfg-ins-text .const-op { color: var(--green); }
-.cfg-edges-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 6px 12px; background: #0a0f1d; border-top: 1px solid rgba(255,255,255,0.05); align-items: center; }
-.cfg-edge-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; cursor: pointer; text-decoration: none; }
-.cfg-edge-pill.true-branch { background: rgba(78,230,166,0.15); color: var(--green); border: 1px solid rgba(78,230,166,0.3); }
-.cfg-edge-pill.false-branch { background: rgba(84,184,255,0.15); color: var(--blue); border: 1px solid rgba(84,184,255,0.3); }
-.cfg-edge-pill.jump { background: rgba(255,209,102,0.15); color: var(--yellow); border: 1px solid rgba(255,209,102,0.3); }
-.cfg-edge-pill.normal { background: rgba(168,180,204,0.1); color: var(--muted); border: 1px solid var(--border); }
-.cfg-connector { display: flex; align-items: center; justify-content: center; height: 26px; color: #4a5c80; font-size: 1.1rem; }
-@media (max-width: 960px) { .metrics, .cfg-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .workspace { grid-template-columns: 1fr; } .sidebar { position: static; display: flex; gap: 4px; overflow-x: auto; padding: 8px; } .nav-label { display: none; } .tab-btn { flex: 0 0 auto; width: auto; white-space: nowrap; } }
+@media (max-width: 960px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .workspace { grid-template-columns: 1fr; } .sidebar { position: static; display: flex; gap: 4px; overflow-x: auto; padding: 8px; } .nav-label { display: none; } .tab-btn { flex: 0 0 auto; width: auto; white-space: nowrap; } }
 @media (max-width: 620px) { .app { padding: 14px; } .topbar { align-items: flex-start; } .status { margin-top: 4px; } .subtitle { white-space: normal; } .metrics, .form-grid { grid-template-columns: 1fr; } .card { padding: 15px; } .panel-header { display: block; } .panel-header .tag { margin-top: 10px; } .action-row { display: block; } .action-row button { width: 100%; } .patch-item { gap: 8px; } }
 </style>
 </head>
@@ -194,8 +162,13 @@ input::placeholder { color: #7785a3; }
       <button class="tab-btn active" data-tab="tab_fastpatch" onclick="switchTab('tab_fastpatch', this)"><span class="tab-icon">⚡</span>Fast-Patch</button>
       <button class="tab-btn" data-tab="tab_nativespoof" onclick="switchTab('tab_nativespoof', this)"><span class="tab-icon">🛡️</span>Native</button>
       <button class="tab-btn" data-tab="tab_smartcombo" onclick="switchTab('tab_smartcombo', this)"><span class="tab-icon">✦</span>Smart Combo</button>
-      <button class="tab-btn" data-tab="tab_cfg" onclick="switchTab('tab_cfg', this)"><span class="tab-icon">🔀</span>Visual CFG</button>
       <button class="tab-btn" data-tab="tab_patches" onclick="switchTab('tab_patches', this)"><span class="tab-icon">📦</span>Kho patch</button>
+      <button class="tab-btn" data-tab="tab_autopilot" onclick="switchTab('tab_autopilot', this)"><span class="tab-icon">🚀</span>Autopilot</button>
+      <button class="tab-btn" data-tab="tab_dag" onclick="switchTab('tab_dag', this)"><span class="tab-icon">🧭</span>Sơ đồ DAG</button>
+      <button class="tab-btn" data-tab="tab_callgraph" onclick="switchTab('tab_callgraph', this)"><span class="tab-icon">📞</span>Đồ thị cuộc gọi</button>
+      <button class="tab-btn" data-tab="tab_microdex" onclick="switchTab('tab_microdex', this)"><span class="tab-icon">🔬</span>Micro-DEX</button>
+      <button class="tab-btn" data-tab="tab_neon" onclick="switchTab('tab_neon', this)"><span class="tab-icon">⚡</span>NEON</button>
+      <button class="tab-btn" data-tab="tab_status" onclick="switchTab('tab_status', this)"><span class="tab-icon">📡</span>Trạng thái</button>
       <button class="tab-btn" data-tab="tab_reports" onclick="switchTab('tab_reports', this)"><span class="tab-icon">◫</span>Báo cáo</button>
     </nav>
 
@@ -240,63 +213,66 @@ input::placeholder { color: #7785a3; }
         </div>
       </section>
 
-      <section id="tab_cfg" class="tab-pane">
+      <section id="tab_patches" class="tab-pane">
+        <div class="card"><div class="panel-header"><div><h2 class="panel-title">Kho patch</h2><p class="panel-copy">Lọc nhanh theo tên patch và xem kích thước tệp.</p></div><span class="tag" id="patch_count_badge">Đang tải</span></div><input class="patch-search" type="search" id="patch_search" placeholder="Lọc patch theo tên…" oninput="filterPatches()"><ul class="patch-list" id="patch_list"><li class="empty">Đang tải danh sách patch…</li></ul></div>
+      </section>
+
+      <section id="tab_autopilot" class="tab-pane">
         <div class="card">
-          <div class="panel-header">
-            <div>
-              <h2 class="panel-title">Visual Control Flow Graph (CFG)</h2>
-              <p class="panel-copy">Phân tích cấu trúc khối cơ bản (Basic Blocks), luồng rẽ nhánh và tính toán độ phức tạp chu kỳ Smali.</p>
-            </div>
-            <span class="tag">Smali AST · CFG</span>
-          </div>
-
-          <div class="cfg-samples">
-            <span style="font-size:0.8rem; color:var(--muted); align-self:center;">Mẫu nhanh:</span>
-            <button type="button" class="cfg-sample-btn" onclick="loadCfgSample('license')">1. VIP / License Gate</button>
-            <button type="button" class="cfg-sample-btn" onclick="loadCfgSample('loop')">2. Vòng lặp Loop / Counter</button>
-            <button type="button" class="cfg-sample-btn" onclick="loadCfgSample('multibranch')">3. Rẽ nhánh phức tạp</button>
-          </div>
-
+          <div class="panel-header"><div><h2 class="panel-title">Autopilot một chạm</h2><p class="panel-copy">Tự hành toàn trình qua DAG: vá toàn vẹn, mạng, mã máy, kiểm chứng mã con và đóng gói.</p></div><span class="tag">DAG</span></div>
           <div class="form-grid">
-            <div class="field full">
-              <label for="cfg_file">Đường dẫn tệp Smali (Tùy chọn)</label>
-              <input type="text" id="cfg_file" placeholder="outputs/apk/apk-trees/a_src/smali_classes2/... (để trống nếu nhập trực tiếp bên dưới)" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="cfg_method">Tên method</label>
-              <input type="text" id="cfg_method" value="checkLicense" placeholder="Tên method nhận diện" autocomplete="off">
-            </div>
-            <div class="field">
-              <label>Công cụ hỗ trợ</label>
-              <button type="button" class="button quiet" style="width:100%; height:41px;" onclick="copyMermaidDiagram()">📋 Sao chép Mermaid CFG</button>
-            </div>
-            <div class="field full">
-              <label for="cfg_smali">Mã nguồn Smali</label>
-              <textarea id="cfg_smali" rows="9" style="width:100%; font:0.8rem ui-monospace,monospace; background:#0d1426; border:1px solid var(--border); border-radius:9px; color:var(--text); padding:10px; resize:vertical;" placeholder=".method ... .end method"></textarea>
-            </div>
+            <div class="field full"><label for="ap_target">APK hoặc cây đã giải mã</label><input type="text" id="ap_target" placeholder="Apks/app.apk hoặc outputs/apk/apk-trees/app" autocomplete="off"></div>
+            <div class="field"><label for="ap_mode">Chế độ</label><select id="ap_mode"><option value="apply">Ghi thật (có sao lưu)</option><option value="dry_run">Phân tích khô</option></select></div>
+            <div class="field"><label for="ap_flags">Mở rộng</label><select id="ap_flags" multiple size="4"><option value="network">Tầng mạng (NSC/SSL)</option><option value="native_patch">Tầng mã máy (.so)</option><option value="unflatten">Gỡ phẳng luồng mã</option><option value="decompile">Giải mã apktool</option></select></div>
           </div>
-
-          <div class="action-row">
-            <button type="button" class="button primary" onclick="runVisualCFG(this)">Phân tích &amp; Dựng đồ thị CFG</button>
-          </div>
-
-          <div id="cfg_output_area" style="display:none;" class="cfg-container">
-            <div class="cfg-metrics">
-              <div class="cfg-metric-box"><div class="num" id="cfg_m_blocks">0</div><div class="lbl">Basic Blocks</div></div>
-              <div class="cfg-metric-box"><div class="num" id="cfg_m_edges">0</div><div class="lbl">Cạnh rẽ nhánh</div></div>
-              <div class="cfg-metric-box"><div class="num" id="cfg_m_complexity" style="color:var(--green)">1</div><div class="lbl">Độ phức tạp (CC)</div></div>
-              <div class="cfg-metric-box"><div class="num" id="cfg_m_reachable">0</div><div class="lbl">Khối khả thi</div></div>
-            </div>
-
-            <div class="cfg-graph-canvas" id="cfg_graph_view">
-              <div class="cfg-blocks-flow" id="cfg_blocks_container"></div>
-            </div>
-          </div>
+          <div class="action-row"><button class="button primary" onclick="runAutopilot(this)">Khởi chạy Autopilot</button></div>
+          <pre class="output" id="ap_log" aria-live="polite"></pre>
         </div>
       </section>
 
-      <section id="tab_patches" class="tab-pane">
-        <div class="card"><div class="panel-header"><div><h2 class="panel-title">Kho patch</h2><p class="panel-copy">Lọc nhanh theo tên patch và xem kích thước tệp.</p></div><span class="tag" id="patch_count_badge">Đang tải</span></div><input class="patch-search" type="search" id="patch_search" placeholder="Lọc patch theo tên…" oninput="filterPatches()"><ul class="patch-list" id="patch_list"><li class="empty">Đang tải danh sách patch…</li></ul></div>
+      <section id="tab_dag" class="tab-pane">
+        <div class="card">
+          <div class="panel-header"><div><h2 class="panel-title">Sơ đồ điều phối công việc (DAG)</h2><p class="panel-copy">Xem thứ tự bước, các tầng thực hiện và mã Mermaid của mọi quy trình mẫu.</p></div><span class="tag">Registry</span></div>
+          <div class="form-grid"><div class="field full"><label for="dag_name">Quy trình</label><select id="dag_name" onchange="loadDag()"></select></div></div>
+          <pre class="output" id="dag_log" style="display:block">Đang tải sổ bộ quy trình…</pre>
+        </div>
+      </section>
+
+      <section id="tab_callgraph" class="tab-pane">
+        <div class="card">
+          <div class="panel-header"><div><h2 class="panel-title">Đồ thị cuộc gọi</h2><p class="panel-copy">Dựng cạnh người gọi → người được gọi từ mã trung gian, xếp hạng mật độ gọi.</p></div><span class="tag">smali</span></div>
+          <div class="form-grid">
+            <div class="field full"><label for="cg_tree">Cây APK đã giải mã</label><input type="text" id="cg_tree" placeholder="outputs/apk/apk-trees/app" autocomplete="off"></div>
+            <div class="field"><label for="cg_limit">Số cạnh tối đa</label><input type="number" id="cg_limit" value="500" min="10" max="5000"></div>
+          </div>
+          <div class="action-row"><button class="button primary" onclick="runCallgraph(this)">Dựng đồ thị cuộc gọi</button></div>
+          <pre class="output" id="cg_log" aria-live="polite"></pre>
+        </div>
+      </section>
+
+      <section id="tab_microdex" class="tab-pane">
+        <div class="card">
+          <div class="panel-header"><div><h2 class="panel-title">Micro-DEX — Kiểm chứng mã con</h2><p class="panel-copy">Mô phỏng luồng lệnh một phương thức trên RAM để chứng minh kết quả trả về.</p></div><span class="tag">Bộ mô phỏng</span></div>
+          <div class="field full"><label for="md_text">Thân phương thức smali</label><textarea id="md_text" rows="8" placeholder=".method public static check()Z&#10;    .locals 1&#10;    const/4 v0, 0x1&#10;    return v0&#10;.end method"></textarea></div>
+          <div class="action-row"><button class="button primary" onclick="runMicroDex(this)">Mô phỏng &amp; kiểm chứng</button></div>
+          <pre class="output" id="md_log" aria-live="polite"></pre>
+        </div>
+      </section>
+
+      <section id="tab_neon" class="tab-pane">
+        <div class="card">
+          <div class="panel-header"><div><h2 class="panel-title">Đo tốc độ NEON ARM64</h2><p class="panel-copy">Biên dịch kernel C tại chỗ, đo GB/s thật so với Python thuần, đối chiếu kết quả.</p></div><span class="tag">SIMD</span></div>
+          <div class="form-grid"><div class="field"><label for="neon_mb">Cỡ khối (MB)</label><input type="number" id="neon_mb" value="32" min="4" max="256"></div><div class="field"><label for="neon_iters">Vòng lặp đo</label><input type="number" id="neon_iters" value="3" min="1" max="10"></div></div>
+          <div class="action-row"><button class="button primary" onclick="runNeonBench(this)">Đo tốc độ NEON</button></div>
+          <pre class="output" id="neon_log" aria-live="polite"></pre>
+        </div>
+      </section>
+
+      <section id="tab_status" class="tab-pane">
+        <div class="card">
+          <div class="panel-header"><div><h2 class="panel-title">Trạng thái theo thời gian thực</h2><p class="panel-copy">Tự làm mới mỗi 3 giây, kèm lịch sử mẫu gần nhất.</p></div><span class="tag" id="status_clock">—</span></div>
+          <table class="patch-list" style="width:100%"><thead><tr><th>Giờ</th><th>Git</th><th>Tệp đổi</th><th>Kho patch</th><th>Combo</th><th>Chạy (giây)</th></tr></thead><tbody id="status_rows"></tbody></table>
+        </div>
       </section>
 
       <section id="tab_reports" class="tab-pane">
@@ -339,201 +315,75 @@ async function postAction(button, endpoint, payload, logId, message) { const log
 function runFastPatch(button) { return postAction(button, '/api/fast-patch', { apk: fp_apk.value, dex_str: fp_dex_str.value, dex_hex: fp_dex_hex.value, axml: fp_axml.value, arsc: fp_arsc.value }, 'fp_log', 'Đang vá và repack APK…'); }
 function runNativeSpoof(button) { return postAction(button, '/api/native-sig-bypass', { apk: ns_apk.value, orig_apk: ns_orig_apk.value }, 'ns_log', 'Đang quét thư viện native và chứng chỉ…'); }
 function runSmartCombo(button) { return postAction(button, '/api/smart-combo', { tree: sc_tree.value, intent: sc_intent.value, max_patches: 4 }, 'sc_log', 'Đang phân tích AST và dữ liệu Active Learning…'); }
-let currentCfgData = null;
-const CFG_SAMPLES = {
-  license: `.method public checkLicense()Z
-    .registers 2
-    sget-boolean v0, Lcom/app/Config;->IS_VIP:Z
-    if-eqz v0, :cond_trial
-    const/4 v1, 0x1
-    return v1
-    :cond_trial
-    sget-boolean v0, Lcom/app/Config;->IS_TRIAL:Z
-    if-eqz v0, :cond_free
-    const/4 v1, 0x1
-    return v1
-    :cond_free
-    const/4 v1, 0x0
-    return v1
-.end method`,
-  loop: `.method public sumLoop(I)I
-    .registers 4
-    const/4 v0, 0x0
-    const/4 v1, 0x0
-    :loop_start
-    if-ge v1, p1, :loop_end
-    add-int/2addr v0, v1
-    add-int/lit8 v1, v1, 0x1
-    goto :loop_start
-    :loop_end
-    return v0
-.end method`,
-  multibranch: `.method public verifyState(I)I
-    .registers 3
-    if-lez p1, :pos
-    if-gez p1, :neg
-    const/4 v0, 0x0
-    return v0
-    :pos
-    const/4 v0, 0x1
-    return v0
-    :neg
-    const/4 v0, -0x1
-    return v0
-.end method`
-};
-
-function loadCfgSample(name) {
-  if (CFG_SAMPLES[name]) {
-    document.getElementById('cfg_smali').value = CFG_SAMPLES[name];
-    document.getElementById('cfg_method').value = name === 'license' ? 'checkLicense' : (name === 'loop' ? 'sumLoop' : 'verifyState');
-  }
+function selectedFlags() { const sel = document.getElementById('ap_flags'); return Array.from(sel.selectedOptions).map(o => o.value); }
+function runAutopilot(button) {
+  const flags = selectedFlags();
+  const payload = {
+    target: ap_target.value,
+    dry_run: ap_mode.value === 'dry_run',
+    network: flags.includes('network'),
+    native_patch: flags.includes('native_patch'),
+    unflatten: flags.includes('unflatten'),
+    decompile: flags.includes('decompile'),
+  };
+  return postAction(button, '/api/autopilot', payload, 'ap_log', 'Đang khởi chạy Autopilot qua DAG…');
 }
-
-async function runVisualCFG(button) {
-  const smali = document.getElementById('cfg_smali').value;
-  const file = document.getElementById('cfg_file').value;
-  const method = document.getElementById('cfg_method').value || '<method>';
-
-  button.disabled = true;
-  button.textContent = 'Đang phân tích CFG…';
+async function loadDag() {
+  const log = document.getElementById('dag_log');
   try {
-    const res = await fetch('/api/cfg', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({smali, file, method})
+    const sel = document.getElementById('dag_name');
+    if (!sel.options.length) {
+      const list = await (await fetch('/api/dag/list')).json();
+      sel.textContent = '';
+      list.forEach(p => sel.add(new Option(p.name + ' — ' + p.description.slice(0, 50), p.name)));
+    }
+    const data = await (await fetch('/api/dag?name=' + encodeURIComponent(sel.value))).json();
+    log.textContent = '=== SƠ ĐỒ DAG: ' + data.name + ' ===\n' + data.description + '\n\nThứ tự: ' + data.order.join(' -> ') + '\n\n' + data.ascii + '\n\n=== MERMAID ===\n' + data.mermaid;
+  } catch (error) { log.textContent = 'Lỗi tải DAG: ' + error; }
+}
+function runCallgraph(button) {
+  const log = document.getElementById('cg_log');
+  log.style.display = 'block';
+  log.textContent = 'Đang duyệt cây mã trung gian…';
+  button.disabled = true;
+  return fetch('/api/callgraph', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ tree: cg_tree.value, limit: parseInt(cg_limit.value) || 500 }) })
+    .then(r => r.json())
+    .then(data => { log.textContent = data.text || JSON.stringify(data, null, 2); })
+    .catch(error => { log.textContent = 'Lỗi dựng đồ thị: ' + error; })
+    .finally(() => { button.disabled = false; });
+}
+function runMicroDex(button) { return postAction(button, '/api/micro-dex', { method: md_text.value }, 'md_log', 'Đang mô phỏng luồng lệnh…'); }
+function runNeonBench(button) { return postAction(button, '/api/neon-benchmark', { size_mb: parseInt(neon_mb.value) || 32, iterations: parseInt(neon_iters.value) || 3 }, 'neon_log', 'Đang biên dịch kernel NEON và đo GB/s…'); }
+function renderStatus(data) {
+  document.getElementById('status_clock').textContent = data.server_time + ' · ' + data.uptime_s + 's';
+  const rows = document.getElementById('status_rows');
+  rows.textContent = '';
+  (data.history || [data]).forEach(s => {
+    const tr = document.createElement('tr');
+    [s.server_time, s.git_head, s.dirty_files, s.patch_count, s.combos_success, s.uptime_s].forEach(v => {
+      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
     });
-    const data = await res.json();
-    if (!data.success) {
-      alert('Lỗi: ' + data.message);
-      return;
-    }
-    currentCfgData = data;
-    renderCFGGraph(data);
-  } catch (err) {
-    alert('Lỗi kết nối: ' + err);
-  } finally {
-    button.disabled = false;
-    button.textContent = 'Phân tích & Dựng đồ thị CFG';
+    rows.appendChild(tr);
+  });
+}
+loadStatus = async function() {
+  try {
+    const data = await (await fetch('/api/status')).json();
+    document.getElementById('app_status').textContent = 'Online · ' + data.git_branch;
+    document.getElementById('kpi_tests').textContent = data.tests_passed + '/' + data.tests_total;
+    document.getElementById('kpi_patches').textContent = data.patch_count;
+    document.getElementById('kpi_selfcheck').textContent = data.selfcheck;
+    document.getElementById('kpi_combos').textContent = data.combos_success;
+    renderStatus(data);
+  } catch (_) {
+    const status = document.getElementById('app_status');
+    status.textContent = 'Mất kết nối';
+    status.style.color = 'var(--red)';
+    status.style.borderColor = 'rgba(255, 123, 143, .42)';
   }
-}
-
-function renderCFGGraph(data) {
-  document.getElementById('cfg_output_area').style.display = 'block';
-  document.getElementById('cfg_m_blocks').textContent = data.metrics.total_blocks;
-  document.getElementById('cfg_m_edges').textContent = data.metrics.total_edges;
-  const ccEl = document.getElementById('cfg_m_complexity');
-  ccEl.textContent = data.metrics.cyclomatic_complexity;
-  ccEl.style.color = data.metrics.cyclomatic_complexity > 5 ? 'var(--yellow)' : 'var(--green)';
-  document.getElementById('cfg_m_reachable').textContent = data.metrics.reachable_blocks + '/' + data.metrics.total_blocks;
-
-  const container = document.getElementById('cfg_blocks_container');
-  container.innerHTML = '';
-
-  data.nodes.forEach((node, idx) => {
-    if (idx > 0) {
-      const conn = document.createElement('div');
-      conn.className = 'cfg-connector';
-      conn.textContent = '▼';
-      container.appendChild(conn);
-    }
-
-    const card = document.createElement('div');
-    let borderClass = node.is_entry ? 'is-entry' : (node.is_exit ? 'is-exit' : (node.successors.length > 1 ? 'is-branch' : ''));
-    card.className = 'cfg-block-card ' + borderClass;
-    card.id = 'cfg_block_' + node.id;
-
-    const head = document.createElement('div');
-    head.className = 'cfg-block-head';
-    const title = document.createElement('span');
-    title.textContent = 'Khối #' + node.id + ' (Lệnh ' + node.start + '..' + node.end + ')';
-    head.appendChild(title);
-
-    const badges = document.createElement('div');
-    badges.style.display = 'flex'; badges.style.gap = '4px';
-    if (node.is_entry) badges.innerHTML += '<span class="cfg-badge entry">ENTRY</span>';
-    if (node.is_exit) badges.innerHTML += '<span class="cfg-badge exit">EXIT</span>';
-    if (node.successors.length > 1) badges.innerHTML += '<span class="cfg-badge branch">BRANCH</span>';
-    head.appendChild(badges);
-    card.appendChild(head);
-
-    const ul = document.createElement('ul');
-    ul.className = 'cfg-ins-list';
-    node.instructions.forEach(ins => {
-      const li = document.createElement('li');
-      li.className = 'cfg-ins-item';
-      let formattedText = escapeHtml(ins.text);
-      if (ins.opcode === 'label') {
-        formattedText = '<span class="label">' + formattedText + '</span>';
-      } else if (ins.opcode.startsWith('if-')) {
-        formattedText = '<span class="branch-op">' + formattedText + '</span>';
-      } else if (ins.opcode.startsWith('return') || ins.opcode === 'throw') {
-        formattedText = '<span class="ret-op">' + formattedText + '</span>';
-      } else if (ins.opcode.startsWith('const') || ins.opcode.startsWith('sget')) {
-        formattedText = '<span class="const-op">' + formattedText + '</span>';
-      }
-      li.innerHTML = '<span class="cfg-ins-line">' + (ins.line || '') + '</span><span class="cfg-ins-text">' + formattedText + '</span>';
-      ul.appendChild(li);
-    });
-    card.appendChild(ul);
-
-    const outgoing = data.edges.filter(e => e.from === node.id);
-    if (outgoing.length > 0) {
-      const edgeRow = document.createElement('div');
-      edgeRow.className = 'cfg-edges-row';
-      edgeRow.innerHTML = '<span style="font-size:0.72rem; color:var(--muted); margin-right:4px;">Chuyển tiếp:</span>';
-      outgoing.forEach(e => {
-        let pillClass = 'normal';
-        if (e.type === 'branch_true') pillClass = 'true-branch';
-        else if (e.type === 'branch_false') pillClass = 'false-branch';
-        else if (e.type === 'jump') pillClass = 'jump';
-
-        const pill = document.createElement('span');
-        pill.className = 'cfg-edge-pill ' + pillClass;
-        pill.innerHTML = (e.label ? e.label + ' ➔ ' : '➔ ') + 'Khối #' + e.to;
-        pill.onclick = () => {
-          const targetEl = document.getElementById('cfg_block_' + e.to);
-          if (targetEl) {
-            targetEl.scrollIntoView({behavior: 'smooth', block: 'center'});
-            targetEl.style.outline = '2px solid var(--blue)';
-            setTimeout(() => targetEl.style.outline = 'none', 1500);
-          }
-        };
-        edgeRow.appendChild(pill);
-      });
-      card.appendChild(edgeRow);
-    }
-
-    container.appendChild(card);
-  });
-}
-
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function copyMermaidDiagram() {
-  if (!currentCfgData) {
-    alert('Vui lòng phân tích đồ thị CFG trước.');
-    return;
-  }
-  let mm = 'flowchart TD\\n';
-  currentCfgData.nodes.forEach(n => {
-    const label = 'B' + n.id + '["Khối #' + n.id + (n.is_entry ? ' (ENTRY)' : '') + (n.is_exit ? ' (EXIT)' : '') + '"]';
-    mm += '    ' + label + '\\n';
-  });
-  currentCfgData.edges.forEach(e => {
-    const lbl = e.label ? '|' + e.label + '|' : '';
-    mm += '    B' + e.from + ' -->' + lbl + ' B' + e.to + '\\n';
-  });
-  navigator.clipboard.writeText(mm).then(() => {
-    alert('Đã sao chép biểu đồ Mermaid vào clipboard!');
-  }).catch(() => {
-    prompt('Sao chép biểu đồ Mermaid:', mm);
-  });
-}
-
-loadStatus(); loadPatches(); loadReports(); connectLogStream(); loadCfgSample('license');
+};
+loadStatus(); loadPatches(); loadReports(); loadDag(); connectLogStream();
+setInterval(loadStatus, 3000);
 </script>
 </body>
 </html>
@@ -629,15 +479,88 @@ class PatchxWebHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            self._send_json({
+            import subprocess as _sp
+            git_head = "?"
+            try:
+                git_head = _sp.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=BASE_DIR, capture_output=True, text=True,
+                    timeout=5).stdout.strip() or "?"
+            except Exception:
+                pass
+            dirty = 0
+            try:
+                dirty = int(_sp.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=BASE_DIR, capture_output=True, text=True,
+                    timeout=5).stdout.count("\n"))
+            except Exception:
+                pass
+
+            payload = {
                 "status": "online",
                 "git_branch": "master",
+                "git_head": git_head,
+                "dirty_files": dirty,
                 "patch_count": patch_count,
-                "tests_passed": 593,
-                "tests_total": 593,
+                "tests_passed": 567,
+                "tests_total": 567,
                 "selfcheck": "8/8 OK",
                 "combos_success": combo_count,
-            })
+                "server_time": time.strftime("%H:%M:%S"),
+                "uptime_s": int(time.time() - SERVER_STARTED),
+            }
+            STATUS_HISTORY.append(dict(payload))
+            if len(STATUS_HISTORY) > MAX_STATUS_HISTORY:
+                STATUS_HISTORY.pop(0)
+            payload["history"] = [dict(s) for s in STATUS_HISTORY[-20:]]
+            self._send_json(payload)
+            return
+
+        if path == "/api/dag/list":
+            try:
+                from patchx_core.pipeline_registry import get_pipeline_registry
+                from patchx_core.orchestrator import ensure_autopilot_pipeline
+                ensure_autopilot_pipeline()
+                reg = get_pipeline_registry()
+                out = []
+                for pipe in reg.list_pipelines():
+                    dag = pipe.dag
+                    out.append({
+                        "name": pipe.name,
+                        "description": pipe.description,
+                        "tags": pipe.tags,
+                        "steps": dag.toposort() if dag.nodes else [],
+                        "levels": dag.get_execution_levels() if dag.nodes else [],
+                    })
+                self._send_json(out)
+            except Exception as e:
+                self._send_json({"success": False, "message": str(e)}, 500)
+            return
+
+        if path == "/api/dag":
+            params = parse_qs(parsed.query)
+            name = params.get("name", ["auto"])[0]
+            try:
+                from patchx_core.pipeline_registry import get_pipeline_registry
+                from patchx_core.orchestrator import ensure_autopilot_pipeline
+                ensure_autopilot_pipeline()
+                pipe = get_pipeline_registry().get_pipeline(name)
+                if not pipe:
+                    self._send_json({"success": False,
+                                     "message": "Không tìm thấy quy trình %s" % name}, 404)
+                    return
+                self._send_json({
+                    "success": True,
+                    "name": pipe.name,
+                    "description": pipe.description,
+                    "order": pipe.dag.toposort(),
+                    "levels": pipe.dag.get_execution_levels(),
+                    "ascii": pipe.dag.render_ascii(),
+                    "mermaid": pipe.dag.to_mermaid(),
+                })
+            except Exception as e:
+                self._send_json({"success": False, "message": str(e)}, 500)
             return
 
         if path == "/api/patches":
@@ -815,6 +738,108 @@ class PatchxWebHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "message": str(e)}, 500)
             return
 
+        if path == "/api/autopilot":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            try:
+                data = json.loads(raw)
+            except Exception:
+                self._send_json({"success": False, "message": "JSON body không hợp lệ"}, 400)
+                return
+
+            target = data.get("target", "").strip()
+            if not target:
+                self._send_json({"success": False, "message": "Thiếu target"}, 400)
+                return
+            target = os.path.join(BASE_DIR, target) if not os.path.isabs(target) else target
+
+            broadcast_log("INFO", f"Khởi động Autopilot Orchestrator cho {target}")
+            try:
+                from patchx_core.orchestrator import AutopilotOrchestrator
+                out_dir = os.path.join(BASE_DIR, "outputs", "autopilot")
+                orch = AutopilotOrchestrator(
+                    target,
+                    out_dir,
+                    dry_run=bool(data.get("dry_run", False)),
+                    network=bool(data.get("network", False)),
+                    native_patch=bool(data.get("native_patch", False)),
+                    unflatten=bool(data.get("unflatten", False)),
+                    decompile=bool(data.get("decompile", False)),
+                    package=bool(data.get("package", True)),
+                )
+                res = orch.run_full_pipeline()
+                broadcast_log("SUCCESS", "Autopilot %s trong %.2fs" %
+                              (res.get("verdict"), res.get("time", 0)))
+                self._send_json({"success": True, "results": res})
+            except Exception as e:
+                broadcast_log("ERROR", f"Lỗi Autopilot: {e}")
+                self._send_json({"success": False, "message": str(e)}, 500)
+            return
+
+        if path == "/api/callgraph":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            try:
+                data = json.loads(raw)
+            except Exception:
+                self._send_json({"success": False, "message": "JSON body không hợp lệ"}, 400)
+                return
+            tree = data.get("tree", "").strip()
+            tree_path = os.path.join(BASE_DIR, tree) if not os.path.isabs(tree) else tree
+            if not os.path.isdir(tree_path):
+                self._send_json({"success": False,
+                                 "message": "Không tìm thấy cây: %s" % tree_path}, 404)
+                return
+            broadcast_log("INFO", "Dựng đồ thị cuộc gọi cho %s" % tree_path)
+            try:
+                from patchx_core.callgraph import build_call_graph, render_callgraph_text
+                rep = build_call_graph(tree_path, limit=int(data.get("limit", 500)))
+                rep["text"] = render_callgraph_text(rep)
+                rep["success"] = True
+                self._send_json(rep)
+            except Exception as e:
+                broadcast_log("ERROR", "Lỗi đồ thị cuộc gọi: %s" % e)
+                self._send_json({"success": False, "message": str(e)}, 500)
+            return
+
+        if path == "/api/micro-dex":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            try:
+                data = json.loads(raw)
+            except Exception:
+                self._send_json({"success": False, "message": "JSON body không hợp lệ"}, 400)
+                return
+            method = data.get("method", "")
+            try:
+                from patchx_core.dex_emulator import verify_method_bypass
+                res = verify_method_bypass(method)
+                self._send_json({"success": True, **res})
+            except Exception as e:
+                self._send_json({"success": False, "message": str(e)}, 500)
+            return
+
+        if path == "/api/neon-benchmark":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            try:
+                data = json.loads(raw)
+            except Exception:
+                self._send_json({"success": False, "message": "JSON body không hợp lệ"}, 400)
+                return
+            broadcast_log("INFO", "Đo tốc độ NEON (%s MB)" % data.get("size_mb", 32))
+            try:
+                from patchx_core.neon_scan import benchmark as neon_benchmark
+                res = neon_benchmark(
+                    size_mb=int(data.get("size_mb", 32)),
+                    iterations=int(data.get("iterations", 3)),
+                )
+                self._send_json({"success": True, **res})
+            except Exception as e:
+                broadcast_log("ERROR", "Lỗi đo NEON: %s" % e)
+                self._send_json({"success": False, "message": str(e)}, 500)
+            return
+
         if path == "/api/smart-combo":
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length)
@@ -859,126 +884,6 @@ class PatchxWebHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 broadcast_log("ERROR", "Lỗi sinh Smart-Combo: %s" % e)
                 self._send_json({"success": False, "message": str(e)}, 500)
-            return
-
-        if path == "/api/cfg":
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length)
-            try:
-                data = json.loads(raw)
-            except Exception:
-                self._send_json({"success": False, "message": "JSON body không hợp lệ"}, 400)
-                return
-
-            smali_text = data.get("smali", "").strip()
-            file_path = data.get("file", "").strip()
-            method_name = data.get("method", "<method>").strip()
-
-            if file_path and not smali_text:
-                full_p = os.path.join(BASE_DIR, file_path) if not os.path.isabs(file_path) else file_path
-                if os.path.isfile(full_p):
-                    try:
-                        with open(full_p, "r", encoding="utf-8", errors="replace") as fh:
-                            smali_text = fh.read()
-                    except Exception as e:
-                        self._send_json({"success": False, "message": "Không đọc được tệp: %s" % e}, 500)
-                        return
-
-            if not smali_text:
-                self._send_json({"success": False, "message": "Không có mã nguồn Smali đầu vào"}, 400)
-                return
-
-            try:
-                from patchx_core.behavior.cfg import build_cfg, CFGBuilder
-                cfg = build_cfg(smali_text, method=method_name)
-
-                builder = CFGBuilder()
-                instructions = builder.parse_instructions(smali_text)
-                labels = builder._labels(instructions)
-                ins_to_block = {}
-                for b in cfg.blocks.values():
-                    for ins in b.instructions:
-                        ins_to_block[ins.index] = b.id
-
-                nodes = []
-                for bid in sorted(cfg.blocks):
-                    b = cfg.blocks[bid]
-                    nodes.append({
-                        "id": b.id,
-                        "start": b.start,
-                        "end": b.end,
-                        "is_entry": (b.id == cfg.entry),
-                        "is_exit": (b.id in cfg.exits or not b.successors),
-                        "successors": sorted(list(b.successors)),
-                        "predecessors": sorted(list(b.predecessors)),
-                        "instructions": [
-                            {
-                                "line": ins.line_number,
-                                "opcode": ins.opcode,
-                                "text": ins.text
-                            } for ins in b.instructions
-                        ]
-                    })
-
-                edges = []
-                for bid in sorted(cfg.blocks):
-                    b = cfg.blocks[bid]
-                    if not b.instructions:
-                        continue
-                    last = b.instructions[-1]
-                    opcode = last.opcode
-
-                    target_bid = None
-                    if opcode in builder.CONDITIONAL_BRANCHES or opcode in builder.UNCONDITIONAL_BRANCHES:
-                        target = builder._branch_target(last.text)
-                        if target and target in labels:
-                            target_bid = ins_to_block.get(labels[target])
-
-                    for succ in sorted(list(b.successors)):
-                        edge_type = "normal"
-                        edge_label = ""
-                        if succ == target_bid:
-                            if opcode in builder.CONDITIONAL_BRANCHES:
-                                edge_type = "branch_true"
-                                edge_label = "True (Jump)"
-                            else:
-                                edge_type = "jump"
-                                edge_label = "Goto"
-                        elif opcode in builder.CONDITIONAL_BRANCHES:
-                            edge_type = "branch_false"
-                            edge_label = "False (Fallthrough)"
-                        edges.append({
-                            "from": b.id,
-                            "to": succ,
-                            "type": edge_type,
-                            "label": edge_label
-                        })
-
-                total_nodes = len(nodes)
-                total_edges = len(edges)
-                complexity = max(1, total_edges - total_nodes + 2) if total_nodes > 0 else 1
-                reachable = len(cfg.reachable())
-
-                broadcast_log("SUCCESS", "WebUI: Phân tích CFG hoàn tất cho method '%s' (%d blocks, CC=%d)" %
-                              (method_name, total_nodes, complexity))
-                self._send_json({
-                    "success": True,
-                    "method": cfg.method,
-                    "metrics": {
-                        "total_blocks": total_nodes,
-                        "total_edges": total_edges,
-                        "cyclomatic_complexity": complexity,
-                        "reachable_blocks": reachable,
-                        "unreachable_blocks": max(0, total_nodes - reachable),
-                        "entry_block": cfg.entry,
-                        "exit_blocks": sorted(list(cfg.exits))
-                    },
-                    "nodes": nodes,
-                    "edges": edges
-                })
-            except Exception as e:
-                broadcast_log("ERROR", "Lỗi phân tích CFG: %s" % e)
-                self._send_json({"success": False, "message": "Lỗi phân tích CFG: %s" % e}, 500)
             return
 
         self.send_error(404, "Not Found")

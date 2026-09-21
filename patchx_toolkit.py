@@ -451,6 +451,22 @@ def cmd_doctor(args):
             _log("  - %s: %s" % (row["name"], state))
     except Exception as exc:
         _log("Không lấy được capability probe: %s" % exc)
+    try:
+        tu_sinh_dir = os.path.join(TOOLKIT_DIR, "outputs", "tu-sinh")
+        os.makedirs(tu_sinh_dir, exist_ok=True)
+        _log("Thư mục tệp tự sinh (tu-sinh): OK (%s)" % tu_sinh_dir)
+    except Exception as exc:
+        _log("Cảnh báo thư mục tệp tự sinh: %s" % exc)
+    try:
+        from patchx_core.rules import verify_rule_integrity
+        r_status = verify_rule_integrity(TOOLKIT_DIR)
+        if r_status["ok"]:
+            _log("Quy tắc cốt lõi Toolkit: ĐỦ (%d/%d mục, lấy Toolkit làm gốc)" % (r_status["present"], r_status["total"]))
+        else:
+            _log("CẢNH BÁO: Thiếu quy tắc cốt lõi: %s" % ", ".join(r_status["missing"]))
+            ok = False
+    except Exception as exc:
+        _log("Không kiểm tra được quy tắc cốt lõi: %s" % exc)
     return 0 if ok else 1
 
 
@@ -599,15 +615,22 @@ def cmd_package(args):
     build = _next_build_number(out_dir)
     name = "patchx-toolkit-%d-%s.zip" % (build, stamp)
     path = os.path.join(out_dir, name)
-    _log("Đang đóng gói: %s" % path)
     included = [
         "patchx",
+        "pushx",
         "patchx_toolkit.py",
         "rodata_bypass_main.py",
         "patchx_core",
+        "toolkit.md",
+        "apk.md",
+        "quy_tac_khoi",
+        "QUY_TAC_NGUOI_DUNG.md",
+        "GEMINI.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "KINH_NGHIEM_HOC_HOI.md",
         "tests",
         "README.md",
-        "AGENTS.md",
         "AGENTS_TRANG_THAI.md",
         "tools",
         "OPERATIONS",
@@ -623,6 +646,15 @@ def cmd_package(args):
     ]
     if os.path.isdir(DEFAULT_DEMO_APK):
         included.append("demo-apk")
+    try:
+        from patchx_core.rules import verify_rule_integrity
+        r_status = verify_rule_integrity(TOOLKIT_DIR)
+        if not r_status["ok"]:
+            _log("CẢNH BÁO ĐÓNG GÓI: Thiếu quy tắc cốt lõi: %s" % ", ".join(r_status["missing"]))
+        else:
+            _log("Bảo toàn quy tắc: ĐỦ (%d/%d quy tắc cốt lõi xuất kèm Toolkit)" % (r_status["present"], r_status["total"]))
+    except Exception:
+        pass
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in included:
             full = os.path.join(TOOLKIT_DIR, item)
@@ -1657,6 +1689,10 @@ def cmd_apk_patch(args):
         changes = _normalize_resource_names(tree, dry_run=False)
         report["resource_fixes"] = len(changes)
         _log("Đã chuẩn hoá %d tên resource chứa `$`" % len(changes))
+        _log("Bước 4.5: Cổng kiểm tra NGỮ NGHĨA smali (chặn VerifyError trước khi build)...")
+        if not _cong_ngu_nghia(tree, tmp_dir, report, args):
+            _write_report(report)
+            return 1
         unsigned = os.path.join(tmp_dir, name + ".unsigned.apk")
         started = time.monotonic()
         proc, cmd = _build_apktool(tree, unsigned,
@@ -1791,6 +1827,104 @@ def _log_validation(r):
         _log("FAIL " + e)
 
 
+def _cong_ngu_nghia(tree, out, report, args):
+    """Bước 1.5 — cổng kiểm tra NGỮ NGHĨA smali: chặn VerifyError trước khi build.
+
+    `patchx_core/smali_validate.py` chỉ kiểm HÌNH DẠNG (cân đối .method/.end method,
+    cú pháp từng lệnh) nên ngày 2026-09-20 nó báo "12.196/12.196 tệp đạt, 0 lỗi"
+    mà app vẫn crash vì máy ảo ART từ chối lớp MainActivity. Cổng này kiểm thêm
+    nhóm lỗi NGỮ NGHĨA:
+      N1 — đọc thanh ghi CHƯA GÁN trên một đường đi nào đó (LỖI: chặn build)
+      N2 — vùng vá ghi đè thanh ghi mà đoạn ngoài vùng vá còn đọc (CẢNH BÁO)
+    Trả True nếu được phép build tiếp.
+    """
+    TEN_CONG_CU = "kiem_tra_verify.py"
+    if getattr(args, "bo_cong_ngu_nghia", False):
+        _log("Bước 1.5: BỎ QUA cổng kiểm tra ngữ nghĩa (--bo-cong-ngu-nghia).")
+        report["cong_ngu_nghia"] = {"bo_qua": True}
+        return True
+    cong_cu = os.path.join(TOOLKIT_DIR, "tools", TEN_CONG_CU)
+    if not os.path.isfile(cong_cu):
+        _log("Bước 1.5: chưa có %s — bỏ qua cổng ngữ nghĩa." % cong_cu)
+        report["cong_ngu_nghia"] = {"thieu_cong_cu": cong_cu}
+        return True
+    cmd = [sys.executable, cong_cu, "--tree", tree, "--json"]
+    if getattr(args, "cong_ngu_nghia_all", False):
+        cmd.append("--all")
+    t0 = time.monotonic()
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    giay = round(time.monotonic() - t0, 1)
+    try:
+        d = json.loads(proc.stdout)
+    except Exception:
+        _log("Bước 1.5: cổng ngữ nghĩa không trả JSON (mã %d) — coi như cảnh báo."
+             % proc.returncode)
+        _log(((proc.stderr or "") + (proc.stdout or "")).strip()[-400:])
+        report["cong_ngu_nghia"] = {"json_loi": True, "returncode": proc.returncode,
+                                    "seconds": giay}
+        return True
+    loi = d.get("loi") or []
+    canh = d.get("canh_bao") or []
+    report["cong_ngu_nghia"] = {"tep": d.get("tep"), "ham": d.get("ham"),
+                                "seconds": giay, "so_loi": len(loi),
+                                "so_canh_bao": len(canh),
+                                "loi": loi[:100], "canh_bao": canh[:100]}
+    duoc_chan, ly_do_chan = _cong_cu_duoc_chan(TEN_CONG_CU, cong_cu)
+    report["cong_ngu_nghia"]["duoc_chan"] = duoc_chan
+    report["cong_ngu_nghia"]["ly_do_chan"] = ly_do_chan
+    _log("Bước 1.5: Cổng ngữ nghĩa — %d tệp, %d hàm (%.1fs): %d LỖI, %d cảnh báo"
+         % (d.get("tep", 0), d.get("ham", 0), giay, len(loi), len(canh)))
+    for v in loi[:25]:
+        _log("  [LỖI ] %s :: %s() dòng %d (pc 0x%X) — đọc %s chưa gán | %s"
+             % (os.path.basename(v.get("tep", "?")), v.get("ham", "?"),
+                v.get("dong", 0), v.get("pc", 0), v.get("thanh_ghi", "?"),
+                v.get("text", "")))
+    for v in canh[:10]:
+        _log("  [CẢNH] %s :: %s() vùng vá dòng %d ghi %s, dòng %d vẫn đọc lại"
+             % (os.path.basename(v.get("tep", "?")), v.get("ham", "?"),
+                v.get("dong_ghi", 0), v.get("thanh_ghi", "?"),
+                v.get("dong_doc_lai", 0)))
+    if loi:
+        if duoc_chan:
+            _log("Cổng ngữ nghĩa CHẶN BUILD (%d lỗi) — sửa xong mới build lại; muốn bỏ "
+                 "qua có chủ ý thì thêm --bo-cong-ngu-nghia." % len(loi))
+            return False
+        _log("Cổng ngữ nghĩa thấy %d lỗi NHƯNG chưa được phép chặn (%s) — CHẠY BÓNG: "
+             "chỉ cảnh báo, KHÔNG chặn build." % (len(loi), ly_do_chan))
+    return True
+
+
+def _cong_cu_duoc_chan(ten_tep, duong_dan):
+    """Công cụ chỉ được quyền CHẶN build khi sổ 'tin dùng' cho phép.
+
+    Đây là cơ chế chống đúng loại sai ngày 2026-09-20: một công cụ chưa chứng minh được
+    mình thì không được phép chặn việc của người dùng.
+      - Có sổ và mục đó ở trạng thái tin_dung + chế độ chan  -> cho chặn.
+      - Có sổ nhưng chưa cho phép                          -> CHẠY BÓNG (chỉ cảnh báo).
+      - Chưa có sổ -> phải tự chứng minh ngay: chạy --tu-kiem, đạt thì cho chặn.
+    """
+    so_tep = os.path.join(TOOLKIT_DIR, "outputs", "cong_cu", "trang_thai.json")
+    try:
+        with open(so_tep, encoding="utf-8") as f:
+            so = json.load(f)
+    except (OSError, ValueError):
+        so = None
+    if so:
+        muc = (so.get("cong_cu") or {}).get(ten_tep) or {}
+        if muc.get("che_do") == "chan" and muc.get("trang_thai") == "tin_dung":
+            return True, "sổ tin dùng cho phép (nguồn nâng: %s)" % muc.get("nguon_nang")
+        return False, "sổ tin dùng CHƯA cho phép (trạng thái=%s, chế độ=%s)" % (
+            muc.get("trang_thai", "khong-co"), muc.get("che_do", "khong-co"))
+    try:
+        r = subprocess.run([sys.executable, duong_dan, "--tu-kiem"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            return True, "tự kiểm đạt ngay tại chỗ (chưa có sổ tin dùng)"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False, "chưa có sổ tin dùng và tự kiểm không đạt"
+
+
 def cmd_apk_debug(args):
     """Chế độ debug-fast: áp patch lên cây ĐÃ GIẢI MÃ rồi xác thực smali,
     DỪNG — không build/ký/cài (rút ngắn vòng lặp fix→test)."""
@@ -1852,6 +1986,10 @@ def cmd_apk_debug(args):
         _log("Xác thực THẤT BẠI (%d lỗi) — xem apk_debug_report.json."
              % len(vr["errors"]))
         return 1
+    _log("Cổng kiểm tra NGỮ NGHĨA smali (không build — bắt lỗi thanh ghi ngay tại đây)...")
+    if not _cong_ngu_nghia(tree, out, report, args):
+        _write_json(out, "apk_debug_report.json", report)
+        return 1
     _log("Xác thực ĐẠT — dùng `apk-build` để build + ký.")
     return 0
 
@@ -1879,6 +2017,10 @@ def cmd_apk_build(args):
     if vr["errors"]:
         _log("Xác thực THẤT BẠI (%d lỗi) — dừng, không build."
              % len(vr["errors"]))
+        _write_json(out, "apk_build_report.json", report)
+        return 1
+    _log("Bước 1.5: Cổng kiểm tra NGỮ NGHĨA smali (chặn VerifyError trước khi build)...")
+    if not _cong_ngu_nghia(tree, out, report, args):
         _write_json(out, "apk_build_report.json", report)
         return 1
     _log("Bước 2: Chuẩn hoá resource `$`")
@@ -2207,6 +2349,10 @@ def cmd_apk_full(args):
         ok = True
         verify_output = ""
     else:
+        _log("Bước 4.5: Cổng kiểm tra NGỮ NGHĨA smali (chặn VerifyError trước khi build)...")
+        if not _cong_ngu_nghia(tree, out, report, args):
+            _write_full_report(out, report)
+            return 1
         _log("Bước 5: Chuẩn hoá resource `$` + apktool b")
         changes = _normalize_resource_names(tree, dry_run=False)
         report["resource_fixes"] = len(changes)
@@ -3402,6 +3548,10 @@ def main(argv=None):
                    help="Mật khẩu keystore (mặc định: patchx123)")
     p.add_argument("--aapt", default=None,
                    help="Đường dẫn tới aapt2 thật")
+    p.add_argument("--bo-cong-ngu-nghia", action="store_true",
+                   help="Bỏ qua cổng kiểm tra NGỮ NGHĨA smali (bước 4.5)")
+    p.add_argument("--cong-ngu-nghia-all", action="store_true",
+                   help="Cổng ngữ nghĩa quét CẢ tệp chưa vá")
     p.set_defaults(func=cmd_apk_patch)
 
     p = sub.add_parser("apk-debug", help="Chế độ debug-fast: áp patch lên "
@@ -3427,6 +3577,10 @@ def main(argv=None):
                    help="Số combo bổ trợ tối đa để tính điểm")
     p.add_argument("--changed-only", action="store_true",
                    help="Xác thực chỉ tệp đổi mới (nhanh hơn nữa)")
+    p.add_argument("--bo-cong-ngu-nghia", action="store_true",
+                   help="Bỏ qua cổng kiểm tra NGỮ NGHĨA smali")
+    p.add_argument("--cong-ngu-nghia-all", action="store_true",
+                   help="Cổng ngữ nghĩa quét CẢ tệp chưa vá")
     p.set_defaults(func=cmd_apk_debug)
 
     p = sub.add_parser("apk-build", help="Build nhanh: xác thực smali → "
@@ -3449,6 +3603,12 @@ def main(argv=None):
                    help="Đường dẫn tới aapt2 thật")
     p.add_argument("--changed-only", action="store_true",
                    help="Xác thực chỉ tệp đổi mới (nhanh hơn nữa)")
+    p.add_argument("--bo-cong-ngu-nghia", action="store_true",
+                   help="Bỏ qua cổng kiểm tra NGỮ NGHĨA smali (bước 1.5) — chỉ dùng "
+                        "khi đã hiểu rõ rủi ro VerifyError")
+    p.add_argument("--cong-ngu-nghia-all", action="store_true",
+                   help="Cổng ngữ nghĩa quét CẢ tệp chưa vá (mặc định chỉ tệp có dấu "
+                        "# PATCHX để giữ vòng lặp build nhanh)")
     p.add_argument("--keep-intermediates", action="store_true",
                    help="Giữ lại tệp .unsigned.apk và .aligned.apk sau khi build")
     p.set_defaults(func=cmd_apk_build)
@@ -3505,6 +3665,10 @@ def main(argv=None):
                    help="Regex phải xuất hiện trong logcat để M3 ĐẠT")
     p.add_argument("--runtime-forbid", action="append", default=[],
                    help="Regex không được xuất hiện trong logcat để M3 ĐẠT")
+    p.add_argument("--bo-cong-ngu-nghia", action="store_true",
+                   help="Bỏ qua cổng kiểm tra NGỮ NGHĨA smali (bước 4.5)")
+    p.add_argument("--cong-ngu-nghia-all", action="store_true",
+                   help="Cổng ngữ nghĩa quét CẢ tệp chưa vá")
     p.set_defaults(func=cmd_apk_full)
 
     p = sub.add_parser("apk-runtime", help="Runtime verify M2/M3 (Đợt C): "

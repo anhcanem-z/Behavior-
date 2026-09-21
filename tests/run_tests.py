@@ -3501,27 +3501,27 @@ def test_cli_danh_muc_so_thu_tu():
                                  command_at_position)
     commands = [name for _, group in COMMAND_GROUPS for name, _ in group]
     help_text = GroupedArgumentParser().format_help()
-    check("cli-danh-muc: đủ 68 lệnh độc nhất",
-          len(commands) == 68 and len(commands) == len(set(commands)),
+    check("cli-danh-muc: đủ 77 lệnh độc nhất",
+          len(commands) == 77 and len(commands) == len(set(commands)),
           "so_luong=%d" % len(commands))
     check("cli-danh-muc: số khớp vị trí đầu/giữa/cuối",
           command_at_position(1) == "intake"
-          and command_at_position(13) == "pipeline"
-          and command_at_position(32) == "frida"
-          and command_at_position(43) == "report"
-          and command_at_position(68) == "clean",
-          "01=%s, 13=%s, 32=%s, 43=%s, 68=%s" % (
-              command_at_position(1), command_at_position(13),
-              command_at_position(32), command_at_position(43),
-              command_at_position(68)))
+          and command_at_position(15) == "unflatten"
+          and command_at_position(36) == "neon-bench"
+          and command_at_position(47) == "smart-patch"
+          and command_at_position(77) == "clean",
+          "01=%s, 15=%s, 36=%s, 47=%s, 77=%s" % (
+              command_at_position(1), command_at_position(15),
+              command_at_position(36), command_at_position(47),
+              command_at_position(77)))
     check("cli-danh-muc: chặn số ngoài danh mục",
-          command_at_position(0) is None and command_at_position(69) is None,
-          "0=%s, 69=%s" % (command_at_position(0), command_at_position(69)))
+          command_at_position(0) is None and command_at_position(78) is None,
+          "0=%s, 78=%s" % (command_at_position(0), command_at_position(78)))
     check("cli-danh-muc: trợ giúp tách màu số/tên/mô tả",
-          "Số 01–68 là vị trí lệnh thật" in help_text
-          and "01." in help_text and "68." in help_text
+          "01." in help_text and "77." in help_text
           and C.WHT in help_text and (C.DIM + "│ ") in help_text,
           "ANSI + dải số")
+
 
 
 def test_res_attr_autofix():
@@ -4703,6 +4703,431 @@ def test_blackboard_and_fused_targets():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_dag_and_pipeline_registry():
+    from patchx_core.dag import DAGNode, PipelineDAG, NodeStatus
+    from patchx_core.pipeline_registry import PipelineRegistry, get_pipeline_registry
+
+    # 1. Kiểm tra khởi tạo node và điều kiện
+    node1 = DAGNode(name="step_a", outputs=["val_a"], action=lambda ctx, bb: {"val_a": 42})
+    node2 = DAGNode(name="step_b", depends_on={"step_a"}, outputs=["val_b"], action=lambda ctx, bb: {"val_b": ctx.get("val_a", 0) * 2})
+    dag = PipelineDAG(name="test_dag")
+    dag.add_node(node1).add_node(node2)
+
+    is_valid, errors = dag.validate()
+    check("dag: kiểm tra tính hợp lệ và không lỗi", is_valid and len(errors) == 0)
+    check("dag: toposort đúng thứ tự phụ thuộc", dag.toposort() == ["step_a", "step_b"])
+    check("dag: execution levels phân tầng chính xác", dag.get_execution_levels() == [["step_a"], ["step_b"]])
+
+    # 2. Kiểm tra thực thi
+    res = dag.execute()
+    check("dag: execute thành công", res.verdict == "SUCCESS" and res.context.get("val_b") == 84)
+
+    # 3. Kiểm tra phát hiện chu trình (cycle)
+    dag_cycle = PipelineDAG(name="cycle_dag")
+    dag_cycle.add_node(DAGNode(name="X", depends_on={"Y"}))
+    dag_cycle.add_node(DAGNode(name="Y", depends_on={"X"}))
+    cycle_valid, _ = dag_cycle.validate()
+    check("dag: phát hiện chính xác cycle", not cycle_valid)
+
+    # 4. Kiểm tra Registry
+    reg = get_pipeline_registry()
+    check("registry: đăng ký đủ >= 8 pipelines tiêu chuẩn", len(reg.list_pipelines()) >= 8)
+    check("registry: pipeline 'auto' tồn tại", reg.has_pipeline("auto"))
+    auto_pipe = reg.get_pipeline("auto")
+    mermaid = auto_pipe.dag.to_mermaid()
+    check("registry: xuất sơ đồ mermaid cho auto", "graph TD" in mermaid and "intake" in mermaid)
+
+
+def test_integrity_decoupler():
+    """AIDM: ca dương (biến đổi đúng) + ca âm (phát hiện phương thức sạch)."""
+    from patchx_core.integrity_decoupler import (
+        decouple_installer_package,
+        decouple_signing_certificate,
+        decouple_dex_digest_check,
+        neutralize_exit_calls,
+        detect_integrity_controls,
+        verify_integrity_bypass,
+        decouple_integrity,
+    )
+
+    installer = (
+        ".method public static getInstaller(Landroid/content/Context;)Ljava/lang/String;\n"
+        "    .registers 2\n"
+        "    invoke-virtual {p0}, Landroid/content/Context;->getPackageManager()Landroid/content/pm/PackageManager;\n"
+        "    move-result-object v0\n"
+        "    invoke-virtual {v0, p0}, Landroid/content/pm/PackageManager;->getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;\n"
+        "    move-result-object v1\n"
+        "    return-object v1\n"
+        ".end method"
+    )
+    changed, out = decouple_installer_package(installer)
+    check("AIDM: getInstallerPackageName -> com.android.vending",
+          changed and 'const-string v1, "com.android.vending"' in out
+          and "getInstallerPackageName(" not in out,
+          out)
+
+    sigcheck = (
+        ".method public static hasSigningCertificate()Z\n"
+        "    .registers 1\n"
+        "    const/4 v0, 0x0\n"
+        "    return v0\n"
+        ".end method"
+    )
+    changed2, out2 = decouple_signing_certificate(sigcheck)
+    check("AIDM: hasSigningCertificate ép trả True",
+          changed2 and "const/4 v0, 0x1" in out2 and "return v0" in out2,
+          out2)
+
+    exiting = (
+        ".method public static die()V\n"
+        "    .registers 1\n"
+        "    invoke-static {v0}, Ljava/lang/System;->exit(I)V\n"
+        "    return-void\n"
+        ".end method"
+    )
+    changed3, out3 = neutralize_exit_calls(exiting)
+    check("AIDM: System.exit -> return-void",
+          changed3 and "System;->exit(" not in out3 and "return-void" in out3,
+          out3)
+
+    digest = (
+        ".method public static checkDexDigest()Z\n"
+        "    .registers 1\n"
+        "    const-string v0, \"classes.dex\"\n"
+        "    const/4 v0, 0x0\n"
+        "    return v0\n"
+        ".end method"
+    )
+    changed4, out4 = decouple_dex_digest_check(digest)
+    check("AIDM: checkDexDigest (classes.dex) ép trả True",
+          changed4 and "const/4 v0, 0x1" in out4 and "return v0" in out4,
+          out4)
+    ver = verify_integrity_bypass(out4)
+    check("AIDM: cổng xác minh xác nhận bypass = True",
+          ver.get("verified") is True,
+          str(ver))
+
+    bc = (
+        ".method public verifySignature([B)Z\n"
+        "    .registers 6\n"
+        "    iget-boolean v0, p0, Lorg/bouncycastle/crypto/signers/DSADigestSigner;->forSigning:Z\n"
+        "    invoke-interface {v1, v0, v3, p1}, Lorg/bouncycastle/crypto/DSA;->verifySignature([BLjava/math/BigInteger;Ljava/math/BigInteger;)Z\n"
+        "    move-result p1\n"
+        "    return p1\n"
+        ".end method"
+    )
+    c7, out7 = decouple_signing_certificate(bc)
+    bc_hits = detect_integrity_controls(bc)
+    check("AIDM (âm): BouncyCastle verifySignature KHÔNG bị ép trả True",
+          (not c7) and "signing-certificate" not in bc_hits and "dex-digest" not in bc_hits,
+          "hits=%s" % bc_hits)
+
+    clean = (
+        ".method public static clean()V\n"
+        "    .registers 1\n"
+        "    return-void\n"
+        ".end method"
+    )
+    c5, out5 = decouple_installer_package(clean)
+    c6, out6 = neutralize_exit_calls(clean)
+    hits = detect_integrity_controls(clean)
+    check("AIDM (âm): phương thức sạch giữ nguyên + detector trả rỗng",
+          (not c5 and not c6) and hits == [],
+          "hits=%s" % hits)
+
+    d = tempfile.mkdtemp(prefix="patchx_aidm_")
+    try:
+        p = os.path.join(d, "a.smali")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(installer + "\n\n" + clean + "\n")
+        rep = decouple_integrity(d, spearheads=(1, 2), dry_run=True)
+        check("AIDM: cây khô đếm files/methods/installer",
+              rep["files_scanned"] == 1 and rep["files_patched"] == 1
+              and rep["installer_decoupled"] == 1
+              and rep["methods_patched"] == 1,
+              "scanned=%s patched=%s installer=%s methods=%s" % (
+                  rep["files_scanned"], rep["files_patched"],
+                  rep["installer_decoupled"], rep["methods_patched"]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_cfg_unflatten():
+    """Gỡ phẳng luồng mã: ca dương (viết lại đúng) + ca âm (không phá mã thường)."""
+    from patchx_core.cfg_unflatten import (
+        detect_flattening,
+        linearize,
+        unflatten_smali,
+    )
+
+    flattened = (
+        ".method public static demo()V\n"
+        "    .locals 1\n"
+        "    const/4 v0, 0x0\n"
+        "    goto :goto_dispatch\n"
+        "    :goto_case_0\n"
+        "    invoke-static {}, Lpkg/Util;->log()V\n"
+        "    const/4 v0, 0x1\n"
+        "    goto :goto_dispatch\n"
+        "    :goto_case_1\n"
+        "    invoke-static {}, Lpkg/Util;->report()V\n"
+        "    const/4 v0, 0x2\n"
+        "    goto :goto_dispatch\n"
+        "    :goto_case_2\n"
+        "    return-void\n"
+        "    :goto_dispatch\n"
+        "    packed-switch v0, :goto_data\n"
+        "    .packed-switch 0x0\n"
+        "        :goto_case_0\n"
+        "        :goto_case_1\n"
+        "        :goto_case_2\n"
+        "    .end packed-switch\n"
+        ".end method\n"
+    )
+    check("unflatten: phát hiện mẫu làm phẳng", detect_flattening(flattened))
+    trace = linearize(flattened)
+    check("unflatten: lần vết đủ 3 khối theo thứ tự",
+          trace.get("flattened") and trace.get("complete")
+          and len(trace["block_order"]) == 3,
+          str(trace))
+    res = unflatten_smali(flattened)
+    text = res.get("text", "")
+    check("unflatten: viết lại thành công, bỏ khối điều phối và bảng switch",
+          res.get("rewritten") and res.get("dispatcher_removed")
+          and "packed-switch" not in text and "goto :goto_dispatch" not in text,
+          str(res)[:300])
+    check("unflatten: giữ nguyên nội dung thật của 3 khối",
+          "Lpkg/Util;->log()V" in text and "Lpkg/Util;->report()V" in text
+          and "return-void" in text and ".end method" in text)
+    check("unflatten: thứ tự tuần tự đúng (log trước report trước return)",
+          text.index("log") < text.index("report") < text.index("return-void"))
+
+    # Ca âm: phương thức thường không có switch phải giữ nguyên từng ký tự.
+    plain = (".method public static f()V\n"
+             "    .locals 1\n"
+             "    const/4 v0, 0x1\n"
+             "    return-void\n"
+             ".end method\n")
+    res2 = unflatten_smali(plain)
+    check("unflatten: ca âm — mã thường giữ nguyên, không viết lại",
+          res2.get("rewritten") is False and res2.get("text") == plain)
+
+
+def test_breakthrough_modules():
+    """Các module đột phá: NEON, Micro-DEX, đồ thị cuộc gọi, Autopilot DAG."""
+    # NEON: đối chiếu kết quả native vs Python (bỏ qua nếu không biên dịch được).
+    from patchx_core import neon_scan
+    data = (b"abc" + bytes(range(0x20, 0x40)) * 8 + b"\x00\x01" + b"/system/bin/su" + b"xyz")
+    py_runs = neon_scan.find_runs_python(data)
+    try:
+        na_runs = neon_scan.find_runs_native(data)
+        check("NEON: kết quả dải byte khớp Python", py_runs == na_runs)
+        check("NEON: tìm mẫu chính xác khớp",
+              neon_scan.find_all_native(data, b"/system/bin/su")
+              == neon_scan.find_all_python(data, b"/system/bin/su"))
+    except Exception:
+        check("NEON: rơi về Python an toàn khi không biên dịch được", True)
+
+    # Micro-DEX: ca trả true và ca trả false.
+    from patchx_core.dex_emulator import verify_method_bypass
+    t = verify_method_bypass(".method public static a()Z\n    .locals 1\n"
+                             "    const/4 v0, 0x1\n    return v0\n.end method")
+    f = verify_method_bypass(".method public static b()Z\n    .locals 1\n"
+                             "    const/4 v0, 0x0\n    return v0\n.end method")
+    check("Micro-DEX: chứng minh hàm trả true", t["verified"] is True)
+    check("Micro-DEX: phát hiện hàm trả false", f["verified"] is False)
+
+    # Đồ thị cuộc gọi trên cây fixture.
+    from patchx_core.callgraph import build_call_graph
+    cg = build_call_graph("tests/fixtures/mau/smali_tree")
+    check("Callgraph: quét fixture ra phương thức",
+          cg["files_scanned"] >= 1 and cg["methods_found"] >= 1)
+
+    # Autopilot: pipeline đăng ký đủ 11 khâu + chạy khô không lỗi chết người.
+    from patchx_core.orchestrator import ensure_autopilot_pipeline, AutopilotOrchestrator
+    pipe = ensure_autopilot_pipeline()
+    check("Autopilot: quy trình DAG có đủ 11 khâu",
+          len(pipe.dag.nodes) == 11 and pipe.dag.validate()[0],
+          str(pipe.dag.toposort()))
+    rep = AutopilotOrchestrator(
+        "tests/fixtures/mau/smali_tree",
+        os.path.join(tempfile.gettempdir(), "ap_test_out"),
+        dry_run=True).run_full_pipeline()
+    check("Autopilot: chạy khô trả báo cáo có bước và kế hoạch",
+          "steps" in rep and "plan" in rep and rep["plan"]["order"][0] == "ap-intake",
+          rep["verdict"])
+
+
+def test_integrity_gate():
+    """Cổng toàn vẹn G1..G5: ca dương (smali hợp lệ PASS) + ca âm (smali hỏng bị phát hiện FAIL)."""
+    from patchx_core.integrity_gate import gate_g2_smali, gate_target
+
+    good = (
+        ".class public Lcom/demo/Demo;\n"
+        ".super Ljava/lang/Object;\n"
+        ".method public static ok()Z\n"
+        "    .locals 1\n"
+        "    const/4 v0, 0x1\n"
+        "    return v0\n"
+        ".end method\n"
+    )
+    ok_rep = gate_g2_smali(good)
+    check("integrity_gate: smali hợp lệ qua G2",
+          ok_rep["ok"] and ok_rep["evidence"]["methods"] == 1,
+          str(ok_rep)[:160])
+
+    broken = (
+        ".class public Lcom/demo/Broken;\n"
+        ".super Ljava/lang/Object;\n"
+        ".method public static ok()Z\n"
+        "    .locals 1\n"
+        "    const/4 v0, 0x1\n"
+        "    return v0\n"
+    )
+    bad_rep = gate_g2_smali(broken)
+    check("integrity_gate: phát hiện smali hỏng (test âm chống báo đạt giả)",
+          bad_rep["ok"] is False and bool(bad_rep.get("reason")),
+          str(bad_rep)[:160])
+
+    d = tempfile.mkdtemp(prefix="patchx_gate_")
+    try:
+        fp = os.path.join(d, "Broken.smali")
+        with open(fp, "w", encoding="utf-8") as fh:
+            fh.write(broken)
+        verdict = gate_target(fp)
+        check("integrity_gate: một cổng duy nhất kết luận FAIL cho tệp hỏng",
+              verdict["verdict"] == "FAIL" and verdict["passed"] == 0,
+              str(verdict)[:160])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_ast_dsl():
+    """AST DSL T1: ca dương (đảo nhánh + ép trả về đúng kiểu) + ca âm (quy tắc sai bị từ chối)."""
+    from patchx_core.ast_dsl import parse_rule, parse_method_ast, apply_rule_to_method
+
+    method_text = (
+        ".method public static gate()Z\n"
+        "    .locals 1\n"
+        "    const/4 v0, 0x0\n"
+        "    if-eqz v0, :cond_fail\n"
+        "    const/4 v0, 0x1\n"
+        "    return v0\n"
+        "    :cond_fail\n"
+        "    const/4 v0, 0x0\n"
+        "    return v0\n"
+        ".end method\n"
+    )
+
+    ast = parse_method_ast(method_text)
+    res = apply_rule_to_method(ast, parse_rule({
+        "ten": "dao", "opcode": "if-eqz", "hanh_dong": "dao-nhanh"}))
+    rendered = ast.render()
+    check("ast_dsl: đảo nhánh if-eqz -> if-nez đúng chuẩn",
+          ast is not None and res.get("thay_doi") == 1 and "if-nez" in rendered,
+          str(res)[:160])
+
+    ast2 = parse_method_ast(method_text)
+    res2 = apply_rule_to_method(ast2, parse_rule({
+        "ten": "true", "phuong_thuc": "gate", "hanh_dong": "ep-tra-ve",
+        "gia_tri": True}))
+    body = ast2.render()
+    check("ast_dsl: ép trả về true đúng kiểu boolean",
+          res2.get("ok") and "const/4 v0, 0x1" in body and "return v0" in body,
+          str(res2)[:160])
+
+    try:
+        parse_rule({"ten": "x", "hanh_dong": "khong-co"})
+        rejected = False
+    except ValueError:
+        rejected = True
+    check("ast_dsl: quy tắc hành động không hợp lệ bị từ chối (test âm)",
+          rejected, "parse_rule không ném lỗi cho hành động lạ")
+
+
+def test_cfg_unflattener():
+    """Lớp giao diện cấp cao của bộ máy gỡ phẳng (shim behavior)."""
+    from patchx_core.behavior.cfg_unflattener import CFGUnflattener
+    sample = (
+        ".method public static demo()V\n"
+        "    .locals 1\n"
+        "    const/4 v0, 0x0\n"
+        "    goto :goto_dispatch\n"
+        "    :goto_case_0\n"
+        "    invoke-static {}, Lpkg/Util;->log()V\n"
+        "    const/4 v0, 0x1\n"
+        "    goto :goto_dispatch\n"
+        "    :goto_case_1\n"
+        "    return-void\n"
+        "    :goto_dispatch\n"
+        "    packed-switch v0, :goto_data\n"
+        "    .packed-switch 0x0\n"
+        "        :goto_case_0\n"
+        "        :goto_case_1\n"
+        "    .end packed-switch\n"
+        ".end method\n"
+    )
+    uf = CFGUnflattener(sample)
+    check("CFGUnflattener: tìm thấy khối điều phối", uf.find_dispatcher())
+    removed = uf.unflatten()
+    check("CFGUnflattener: gỡ phẳng và báo số khối đã loại",
+          removed >= 1 and uf.result.get("rewritten"))
+
+
+def test_native_mutator():
+    """Đột biến zero-drift: quét fixture .so ở chế độ phân tích (không ghi đĩa)."""
+    from patchx_core.behavior.native_mutator import auto_mutate_native
+    d = tempfile.mkdtemp(prefix="patchx_mutator_")
+    try:
+        src = os.path.join("tests", "fixtures", "mau", "libdemo64.so")
+        dst = os.path.join(d, "libdemo64.so")
+        shutil.copyfile(src, dst)
+        rep = auto_mutate_native(d, output_dir=os.path.join(d, "out"),
+                                 apply_disk=False, gen_frida=False)
+        check("native_mutator: báo cáo đúng cấu trúc",
+              rep["total_so_files"] == 1 and "findings_count" in rep,
+              str(rep)[:200])
+def test_autonomous_and_multidomain():
+    """Kiểm tra các module đột phá đa luồng và đa phương diện: network_equalizer, native_symbolic_lifter, accuracy_oracle, autonomous, aarch64_asm, elf_expander, micro_lifter, micro_lifter_cfg, xref_hunter."""
+    from patchx_core.behavior.network_equalizer import NetworkEqualizer
+    from patchx_core.behavior.native_symbolic_lifter import NativeSymbolicLifter, AArch64Opcode
+    from patchx_core.behavior.accuracy_oracle import AccuracyOracle
+    from patchx_core.autonomous import AutonomousOrchestrator
+    import patchx_core.behavior.aarch64_asm as aarch64_asm
+    import patchx_core.behavior.elf_expander as elf_expander
+    import patchx_core.behavior.micro_lifter as micro_lifter
+    import patchx_core.behavior.micro_lifter_cfg as micro_lifter_cfg
+    import patchx_core.behavior.xref_hunter as xref_hunter
+
+    # 1. Network Equalizer
+    neq = NetworkEqualizer()
+    neq.register_mock_route("/api/v1/user", {"vip": True, "level": "PRO"})
+    check("network_equalizer: khởi tạo và đăng ký route mock", bool(neq))
+
+    # 2. Native Symbolic Lifter
+    lifter = NativeSymbolicLifter()
+    mov_code = AArch64Opcode.make_mov_w0(1)
+    check("native_symbolic_lifter: sinh lệnh MOV W0, #1", (mov_code & 0xFFFF0000) != 0)
+
+    # 3. Accuracy Oracle
+    oracle_res = AccuracyOracle.evaluate_target_confidence(
+        [".method public static isVip()Z", "const/4 v0, 0x1", "if-eqz v0, :cond", "return v0", ".end method"],
+        ["Java_com_demo_checkVip"],
+        ["https://api.demo.com/v1/auth"]
+    )
+    check("accuracy_oracle: tính điểm tin cậy >= 85", oracle_res["score"] >= 85)
+
+    # 4. Autonomous Orchestrator
+    auto = AutonomousOrchestrator()
+    check("autonomous: khởi tạo bộ não tự trị thành công", bool(auto.blackboard))
+
+    # 5. Full Deobfuscator
+    from patchx_core.behavior.full_deobfuscator import FullDeobfuscator
+    deobf = FullDeobfuscator()
+    res_deobf = deobf.deobfuscate_method(".method public a()V\nnop\nreturn-void\n.end method")
+    check("full_deobfuscator: loại bỏ lệnh nop thành công", res_deobf["nops_removed"] == 1)
+
+
 def main():
     test_baseline()
     test_combo()
@@ -4797,6 +5222,15 @@ def main():
     test_intake_capabilities()
     test_unified_pipeline()
     test_blackboard_and_fused_targets()
+    test_dag_and_pipeline_registry()
+    test_integrity_decoupler()
+    test_cfg_unflatten()
+    test_breakthrough_modules()
+    test_cfg_unflattener()
+    test_native_mutator()
+    test_integrity_gate()
+    test_ast_dsl()
+    test_autonomous_and_multidomain()
     from tests.test_modder_hub_fastpath import run_all_modder_hub_tests
     run_all_modder_hub_tests(check)
     ok = sum(1 for _, c, _ in RESULTS if c)

@@ -11,9 +11,12 @@ Cho phép can thiệp trực tiếp file `.dex` ở mức nhị phân:
 
 import hashlib
 import os
+import re
 import shutil
 import struct
 import zlib
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 DEX_MAGICS = (
     b"dex\n035\0",
@@ -260,3 +263,241 @@ def patch_dex_file_bytecode(dex_path, replacements, backup_dir=None):
         "details": details,
         "new_size": len(curr_bytes),
     }
+
+
+# =====================================================================
+# NÂNG CẤP T2 (2026-09-19): sửa DEX ở MỨC PHƯƠNG THỨC trên cùng nền năng lực
+# có sẵn (DexHeader + recalculate_dex_checksums + thay bytecode).
+# =====================================================================
+
+def read_uleb128(data: bytes, pos: int) -> Tuple[int, int]:
+    """Đọc số nguyên không dấu mã dài thay đổi (ULEB128) tại vị trí pos."""
+    result = 0
+    shift = 0
+    while True:
+        if pos >= len(data):
+            raise ValueError("ULEB128 cụt ngang tại offset %d" % pos)
+        b = data[pos]
+        pos += 1
+        result |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            break
+        shift += 7
+        if shift > 70:
+            raise ValueError("ULEB128 quá dài tại offset %d" % pos)
+    return result, pos
+
+
+class DexMethodMap:
+    """Ánh xạ tên lớp + tên phương thức -> code_item (offset lệnh, số lệnh).
+
+    Đi theo chuỗi quan hệ chuẩn của định dạng DEX:
+    string_ids -> type_ids -> proto_ids -> method_ids -> class_defs
+    -> class_data_item -> encoded_method -> code_item.
+    """
+
+    def __init__(self, dex_data: bytes):
+        if len(dex_data) < 112:
+            raise ValueError("Dữ liệu DEX quá ngắn")
+        self.data = bytearray(dex_data)
+        self.hdr = DexHeader(bytes(dex_data))
+        self._str_off = self._build_string_offsets()
+
+    def _build_string_offsets(self) -> List[int]:
+        h = self.hdr
+        base = h.string_ids_off
+        out = []
+        for i in range(h.string_ids_size):
+            off = base + i * 4
+            if off + 4 > len(self.data):
+                raise ValueError("Bảng string_ids ngoài tệp")
+            out.append(struct.unpack_from("<I", self.data, off)[0])
+        return out
+
+    def get_string(self, idx: int) -> str:
+        if not (0 <= idx < len(self._str_off)):
+            return ""
+        pos = self._str_off[idx]
+        if pos >= len(self.data):
+            return ""
+        try:
+            _utf16_len, pos = read_uleb128(self.data, pos)
+            end = self.data.find(b"\x00", pos)
+            if end < 0:
+                end = len(self.data)
+            return bytes(self.data[pos:end]).decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def get_type(self, type_idx: int) -> str:
+        h = self.hdr
+        off = h.type_ids_off + type_idx * 4
+        if off + 4 > len(self.data) or not (0 <= type_idx < h.type_ids_size):
+            return ""
+        sidx = struct.unpack_from("<I", self.data, off)[0]
+        return self.get_string(sidx)
+
+    def method_id(self, idx: int) -> Dict[str, Any]:
+        h = self.hdr
+        off = h.method_ids_off + idx * 8
+        class_idx, proto_idx, name_idx = struct.unpack_from("<HHI", self.data, off)
+        return {"idx": idx, "class_idx": class_idx, "proto_idx": proto_idx,
+                "name_idx": name_idx, "name": self.get_string(name_idx),
+                "class_name": self.get_type(class_idx)}
+
+    def _read_class_data(self, off: int) -> Dict[str, Any]:
+        if off == 0:
+            return {"direct": [], "virtual": []}
+        pos = off
+        sizes = []
+        for _ in range(4):
+            v, pos = read_uleb128(self.data, pos)
+            sizes.append(v)
+        for _ in range(sizes[0] + sizes[1]):
+            for _ in range(2):
+                _, pos = read_uleb128(self.data, pos)
+        direct = []
+        virtual = []
+        method_idx = 0
+        for bucket in (direct, virtual):
+            for _ in range(sizes[2] if bucket is direct else sizes[3]):
+                diff, pos = read_uleb128(self.data, pos)
+                _, pos = read_uleb128(self.data, pos)
+                code_off, pos = read_uleb128(self.data, pos)
+                method_idx += diff
+                bucket.append({"method_idx": method_idx, "code_off": code_off})
+        return {"direct": direct, "virtual": virtual}
+
+    def map_methods(self) -> List[Dict[str, Any]]:
+        h = self.hdr
+        out: List[Dict[str, Any]] = []
+        for ci in range(h.class_defs_size):
+            cd_off = h.class_defs_off + ci * 32
+            if cd_off + 32 > len(self.data):
+                break
+            (class_idx, _access, _super, _ifaces, _src, _ann, class_data_off,
+             _static_vals) = struct.unpack_from("<8I", self.data, cd_off)
+            class_name = self.get_type(class_idx)
+            cd = self._read_class_data(class_data_off)
+            for is_direct, bucket in ((True, cd["direct"]), (False, cd["virtual"])):
+                for enc in bucket:
+                    mid = self.method_id(enc["method_idx"])
+                    item = {"class_name": class_name, "name": mid["name"],
+                            "method_idx": mid["idx"], "code_off": enc["code_off"],
+                            "is_direct": is_direct}
+                    self._fill_code_item(item)
+                    out.append(item)
+        return out
+
+    def _fill_code_item(self, item: Dict[str, Any]) -> None:
+        off = item["code_off"]
+        if off == 0 or off + 16 > len(self.data):
+            item["has_code"] = False
+            return
+        (regs, ins, outs, tries, _debug, insns_size) = struct.unpack_from(
+            "<HHHHII", self.data, off)
+        insns_off = off + 16
+        insns_bytes = insns_size * 2
+        end = insns_off + insns_bytes
+        item.update({"has_code": True, "registers": regs, "ins": ins,
+                     "outs": outs, "tries": tries, "insns_size": insns_size,
+                     "insns_off": insns_off, "insns_end": min(end, len(self.data))})
+
+
+def normalize_hex(s: str) -> bytes:
+    """Chuyển chuỗi hex dạng '12 00' hoặc '1200' hoặc '0x12' thành bytes."""
+    s = s.strip().replace("0x", "").replace(" ", "").replace(",", "")
+    if len(s) % 2:
+        raise ValueError("Chuỗi hex lẻ ký tự: %r" % s)
+    try:
+        return bytes.fromhex(s)
+    except ValueError as exc:
+        raise ValueError("Chuỗi hex không hợp lệ %r: %s" % (s, exc)) from exc
+
+
+def patch_method_opcode(dex_data: bytes, method_regex: str,
+                        target: str, replacement: str,
+                        limit: int = 1) -> Dict[str, Any]:
+    """Thay mẫu lệnh cùng độ dài byte CHỈ trong khoảng lệnh của phương thức khớp.
+
+    Nâng cấp từ replace_bytecode_pattern: thêm ràng buộc phạm vi theo phương
+    thức để không vô tình đụng dữ liệu ngoài mã; vẫn zero-drift + tính lại
+    checksum/signature bằng nền đã có.
+    """
+    tgt = normalize_hex(target)
+    repl = normalize_hex(replacement)
+    if len(tgt) != len(repl):
+        raise ValueError(
+            "Mẫu mới (%d byte) phải bằng mẫu cũ (%d byte) để giữ nguyên cấu trúc"
+            % (len(repl), len(tgt)))
+    if not tgt:
+        raise ValueError("Mẫu cũ không được trống")
+    try:
+        rx = re.compile(method_regex)
+    except re.error as exc:
+        raise ValueError("Regex tên phương thức sai: %s" % exc) from exc
+
+    mmap = DexMethodMap(dex_data)
+    data = bytearray(dex_data)
+    hits = []
+    for item in mmap.map_methods():
+        if not item.get("has_code") or not rx.search(item["name"]):
+            continue
+        window = bytes(data[item["insns_off"]:item["insns_end"]])
+        pos = 0
+        while limit <= 0 or len(hits) < limit:
+            found = window.find(tgt, pos)
+            if found < 0:
+                break
+            abs_off = item["insns_off"] + found
+            data[abs_off:abs_off + len(repl)] = repl
+            hits.append({"method": item["name"], "class": item["class_name"],
+                         "offset": abs_off, "method_idx": item["method_idx"]})
+            pos = found + len(tgt)
+    if not hits:
+        return {"changed": False, "hits": 0, "data": bytes(data),
+                "reason": "không tìm thấy phương thức khớp hoặc mẫu lệnh"}
+    return {"changed": True, "hits": len(hits), "data":
+            recalculate_dex_checksums(bytes(data)), "matches": hits}
+
+
+def map_methods_report(dex_data: bytes, filter_regex: Optional[str] = None,
+                       limit: int = 200) -> Dict[str, Any]:
+    """Báo cáo bản đồ phương thức DEX (dùng chung DexMethodMap)."""
+    mmap = DexMethodMap(dex_data)
+    rx = re.compile(filter_regex) if filter_regex else None
+    methods = []
+    for item in mmap.map_methods():
+        if rx and not rx.search(item["name"]) and not rx.search(item["class_name"]):
+            continue
+        methods.append(item)
+        if len(methods) >= limit:
+            break
+    return {"header": {
+                "magic": mmap.hdr.magic.decode("latin-1", errors="replace"),
+                "file_size": mmap.hdr.file_size,
+                "method_ids": mmap.hdr.method_ids_size,
+                "class_defs": mmap.hdr.class_defs_size},
+            "methods": methods, "shown": len(methods)}
+
+
+def apply_dex_method_patch(path: str | Path, method_regex: str,
+                           target: str, replacement: str,
+                           backup_dir: Optional[str | Path] = None,
+                           dry_run: bool = True) -> Dict[str, Any]:
+    """Áp bản vá mức phương thức lên tệp .dex (sao lưu nếu ghi thật)."""
+    fp = Path(path)
+    original = fp.read_bytes()
+    rep = patch_method_opcode(original, method_regex, target, replacement)
+    rep["path"] = str(fp)
+    rep["dry_run"] = dry_run
+    if rep["changed"] and not dry_run:
+        if backup_dir is not None:
+            bdir = Path(backup_dir)
+            bdir.mkdir(parents=True, exist_ok=True)
+            bak = bdir / (fp.name + ".bak")
+            if not bak.exists():
+                bak.write_bytes(original)
+        fp.write_bytes(rep["data"])
+        rep["backup"] = str(bdir) if backup_dir else None
+    return rep

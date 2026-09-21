@@ -63,6 +63,7 @@
       "role": "File tự sinh và output theo module",
       "targets": [
         "../outputs",
+        "../outputs/tu-sinh",
         "../dist"
       ]
     },
@@ -83,13 +84,9 @@
     },
     {
       "id": "08_workspace_layout",
-      "role": "Bố cục workspace tương thích theo lớp chức năng",
+      "role": "Tài liệu và bố cục bổ trợ",
       "targets": [
-        "../docs",
-        "../data",
-        "../workspaces",
-        "../artifacts",
-        "../experiments"
+        "../docs"
       ]
     }
   ]

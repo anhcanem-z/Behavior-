@@ -228,9 +228,10 @@ def main():
     print("- APK: Apks/ {} · cây giải mã {} · combos_success {} lượt".format(
         count("Apks/*"), apk_tree_count(),
         len(read_json("outputs/combos/combos_success.json") or [])))
-    print("- Behavior artifact: {} · Gadget APK: {}".format(
+    print("- Behavior artifact: {} · Gadget APK: {} · Tệp tự sinh (tu-sinh): {}".format(
         count("outputs/behavior/artifacts/*"),
-        count("outputs/behavior/gadget/*_signed.apk")))
+        count("outputs/behavior/gadget/*_signed.apk"),
+        count("outputs/tu-sinh/*")))
 
     print()
     print("B. THÀNH PHẦN CẦN BỔ SUNG (file mới hơn mốc cập nhật)")

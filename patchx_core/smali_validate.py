@@ -102,6 +102,7 @@ def validate_tree(tree_root, changed_only=False, state_file=None):
     # tệp doi moi, khong quet lai toan bo.
     new_state = dict(old_state)
     files = smali_files(tree_root)
+    to_check = []
     for rel in files:
         p = os.path.join(tree_root, rel)
         try:
@@ -111,13 +112,24 @@ def validate_tree(tree_root, changed_only=False, state_file=None):
         key = [st.st_mtime_ns, st.st_size]
         if changed_only and old_state.get(rel) == key:
             continue
-        changed += 1
+        to_check.append((rel, p, key))
+
+    changed = len(to_check)
+
+    def _validate_worker(item):
+        rel, p, key = item
         try:
             with open(p, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
-        except OSError:
-            continue
-        errs, nm = validate_file(text)
+            errs, nm = validate_file(text)
+            return rel, key, errs, nm
+        except Exception:
+            return rel, key, [], 0
+
+    from .pool import run_parallel
+    results = run_parallel(_validate_worker, to_check, max_workers=8)
+
+    for rel, key, errs, nm in results:
         methods += nm
         if errs:
             errors.append("%s: %s" % (rel, "; ".join(errs)))

@@ -9,6 +9,7 @@ target that su duoc goi.
 import os
 import re
 import hashlib
+import json
 from collections import defaultdict, deque
 
 
@@ -428,68 +429,126 @@ def build_app_model_v2(tree, include_bodies=False):
     """Xay ``patchx.app-model/v2`` chi-doc, song song model V1.
 
     V2 bo sung ba identity (exact/structural/semantic), quan he caller/callee
-    va khoang cach ngan nhat tu Application/launcher. Ham khong sua cây APK,
-    khong tao patch va khong duoc dung de goi Engine.apply.
+    va khoang cach ngan nhat tu Application/launcher. Tối ưu hóa bằng bộ nhớ đệm
+    thông minh và xử lý song song trên 8 nhân CPU.
     """
-    methods = []
-    by_id = {}
+    cache_dir = os.path.join(tree, ".patchx", "cache")
+    if not os.path.exists(cache_dir):
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+        except OSError:
+            cache_dir = os.path.join(os.getcwd(), "outputs", "cache")
+            os.makedirs(cache_dir, exist_ok=True)
+
+    smali_paths = []
     for root in _smali_roots(tree):
         for base, _dirs, files in os.walk(root):
-            for fname in sorted(files):
-                if not fname.endswith(".smali"):
-                    continue
-                path = os.path.join(base, fname)
-                try:
-                    text = open(path, encoding="utf-8", errors="replace").read()
-                except OSError:
-                    continue
-                cm = _CLASS_RE.search(text)
-                cls = cm.group(1) if cm else ""
-                rel = os.path.relpath(path, tree)
-                for meth in extract_methods(text):
-                    sig_match = re.search(r"([^\s(]+\([^)]*\)\S+)", meth["signature"])
-                    method_sig = sig_match.group(1) if sig_match else ""
-                    method_id = "%s->%s" % (cls, method_sig) if cls and method_sig else "%s:%d" % (rel, meth["line"])
-                    params, ret = _method_types(meth["signature"])
-                    calls = [m.group("target") for m in INVOKE_FULL_RE.finditer(meth["body"])]
-                    reads = _FIELD_READ_RE.findall(meth["body"])
-                    writes = _FIELD_WRITE_RE.findall(meth["body"])
-                    strings = _STRING_RE.findall(meth["body"])
-                    ops = _opcode_histogram(meth["body"])
-                    branches = sum(v for op, v in ops.items() if op.startswith("if-"))
-                    structural = {
-                        "parameters": params, "return_type": ret,
-                        "opcode_histogram": ops, "branch_count": branches,
-                        "invoke_shapes": sorted(_invoke_shape(x) for x in calls),
-                    }
-                    semantic = {
-                        "parameters": params, "return_type": ret,
-                        "platform_calls": sorted(_invoke_shape(x) for x in calls
-                                                 if x.startswith(("Landroid/", "Ljava/", "Lkotlin/"))),
-                        "strings": sorted(strings),
-                        "field_read_types": sorted(x.rsplit(":", 1)[-1] for x in reads),
-                    }
-                    record = {
-                        "id": method_id, "class": cls, "file": rel,
-                        "line": meth["line"], "signature": meth["signature"],
-                        "features": {"return_type": ret, "parameters": params,
-                                     "opcode_histogram": ops, "branch_count": branches,
-                                     "strings": strings, "calls": calls,
-                                     "field_reads": reads, "field_writes": writes},
-                        "identity": {
-                            "exact": _sha24(_normalized_method_body(meth["body"])),
-                            "structural": _sha24(repr(structural)),
-                            "semantic": _sha24(repr(semantic)),
-                        },
-                        "relations": {"callers": [], "callees": calls,
-                                      "entry_distance": None},
-                        "evidence": {"source_file": rel, "line": meth["line"],
-                                     "extractor_version": "model/v2"},
-                    }
-                    if include_bodies:
-                        record["body"] = meth["body"]
-                    methods.append(record)
-                    by_id[method_id] = record
+            for fname in files:
+                if fname.endswith(".smali"):
+                    smali_paths.append(os.path.join(base, fname))
+
+    if not smali_paths:
+        return {
+            "schema": "patchx.app-model/v2", "tree": os.path.abspath(tree),
+            "smali_roots": [], "entry_classes": [], "methods": [], "call_edges": [],
+            "summary": {"methods": 0, "call_edges": 0, "reachable_from_entry": 0, "decision_points": 0},
+        }
+
+    # Tính khóa bộ nhớ đệm dựa trên số tệp, mtime lớn nhất và tổng kích thước
+    max_mtime = 0
+    total_size = 0
+    for p in smali_paths:
+        try:
+            st = os.stat(p)
+            if st.st_mtime_ns > max_mtime:
+                max_mtime = st.st_mtime_ns
+            total_size += st.st_size
+        except OSError:
+            pass
+
+    cache_key = f"{len(smali_paths)}_{max_mtime}_{total_size}_{include_bodies}"
+    cache_hash = hashlib.md5(cache_key.encode()).hexdigest()[:16]
+    cache_path = os.path.join(cache_dir, f"model_v2_{cache_hash}.json")
+
+    if os.path.isfile(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as fh:
+                cached_data = json.load(fh)
+                if cached_data.get("cache_key") == cache_key:
+                    return cached_data["model"]
+        except Exception:
+            pass
+
+    methods = []
+    by_id = {}
+
+    def _process_file(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            return []
+        cm = _CLASS_RE.search(text)
+        cls = cm.group(1) if cm else ""
+        rel = os.path.relpath(path, tree)
+        file_methods = []
+        for meth in extract_methods(text):
+            sig_match = re.search(r"([^\s(]+\([^)]*\)\S+)", meth["signature"])
+            method_sig = sig_match.group(1) if sig_match else ""
+            method_id = "%s->%s" % (cls, method_sig) if cls and method_sig else "%s:%d" % (rel, meth["line"])
+            params, ret = _method_types(meth["signature"])
+            calls = [m.group("target") for m in INVOKE_FULL_RE.finditer(meth["body"])]
+            reads = _FIELD_READ_RE.findall(meth["body"])
+            writes = _FIELD_WRITE_RE.findall(meth["body"])
+            strings = _STRING_RE.findall(meth["body"])
+            ops = _opcode_histogram(meth["body"])
+            branches = sum(v for op, v in ops.items() if op.startswith("if-"))
+            structural = {
+                "parameters": params, "return_type": ret,
+                "opcode_histogram": ops, "branch_count": branches,
+                "invoke_shapes": sorted(_invoke_shape(x) for x in calls),
+            }
+            semantic = {
+                "parameters": params, "return_type": ret,
+                "platform_calls": sorted(_invoke_shape(x) for x in calls
+                                         if x.startswith(("Landroid/", "Ljava/", "Lkotlin/"))),
+                "strings": sorted(strings),
+                "field_read_types": sorted(x.rsplit(":", 1)[-1] for x in reads),
+            }
+            record = {
+                "id": method_id, "class": cls, "file": rel,
+                "line": meth["line"], "signature": meth["signature"],
+                "features": {"return_type": ret, "parameters": params,
+                             "opcode_histogram": ops, "branch_count": branches,
+                             "strings": strings, "calls": calls,
+                             "field_reads": reads, "field_writes": writes},
+                "identity": {
+                    "exact": _sha24(_normalized_method_body(meth["body"])),
+                    "structural": _sha24(repr(structural)),
+                    "semantic": _sha24(repr(semantic)),
+                },
+                "relations": {"callers": [], "callees": calls,
+                              "entry_distance": None},
+                "evidence": {"source_file": rel, "line": meth["line"],
+                             "extractor_version": "model/v2"},
+            }
+            if include_bodies:
+                record["body"] = meth["body"]
+            file_methods.append(record)
+        return file_methods
+
+    from .pool import run_parallel, get_cpu_cores
+    workers = get_cpu_cores()
+    parallel_results = run_parallel(_process_file, smali_paths, max_workers=workers)
+
+    for item in parallel_results:
+        if isinstance(item, list):
+            for m in item:
+                methods.append(m)
+                by_id[m["id"]] = m
+        elif item:
+            methods.append(item)
+            by_id[item["id"]] = item
 
     callers = defaultdict(list)
     edges = []
@@ -520,7 +579,7 @@ def build_app_model_v2(tree, include_bodies=False):
             if target in by_id and target not in visited:
                 queue.append((target, distance + 1))
 
-    return {
+    model_res = {
         "schema": "patchx.app-model/v2", "tree": os.path.abspath(tree),
         "smali_roots": [os.path.relpath(p, tree) for p in _smali_roots(tree)],
         "entry_classes": sorted(entry_classes_desc), "methods": methods,
@@ -534,6 +593,14 @@ def build_app_model_v2(tree, include_bodies=False):
                                    or m["features"]["branch_count"] > 0),
         },
     }
+
+    try:
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            json.dump({"cache_key": cache_key, "model": model_res}, fh, ensure_ascii=False)
+    except Exception:
+        pass
+
+    return model_res
 
 
 def call_graph_rank(tree, entries, depth=3, top=15):

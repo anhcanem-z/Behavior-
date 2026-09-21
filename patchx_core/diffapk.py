@@ -185,7 +185,10 @@ def prepare_tree(src, keep=None):
     """APK → cây (apktool d); thu mức → dung luon. Tra (tree, da_decode, tmp)."""
     if os.path.isdir(src):
         return os.path.abspath(src), False, None
-    tmp = keep or tempfile.mkdtemp(prefix="patchx_diff_tree_")
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tu_sinh_dir = os.path.join(root_dir, "outputs", "tu-sinh", "diff_trees")
+    os.makedirs(tu_sinh_dir, exist_ok=True)
+    tmp = keep or tempfile.mkdtemp(prefix="tree_", dir=tu_sinh_dir)
     tree = os.path.join(tmp, os.path.splitext(
         os.path.basename(src))[0])
     import subprocess

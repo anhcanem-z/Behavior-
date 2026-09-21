@@ -1,13 +1,27 @@
 #!/data/data/com.termux/files/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Điểm vào của bộ patchx — chạy: python3 patchx LỆNH ..."""
+"""Điểm vào duy nhất hợp nhất của bộ patchx — chạy: python3 patchx LỆNH ..."""
 
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
-from patchx_core.cli import main
+TOOLKIT_CMDS = {
+    "doctor", "run", "package", "list", "session", "apk-plan",
+    "apk-test", "apk-fix-res", "apk-patch", "apk-debug", "apk-build",
+    "apk-full", "apk-runtime", "bench-scan", "plan-ui", "webui",
+    "install-deps"
+}
+
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] in TOOLKIT_CMDS:
+        import patchx_toolkit
+        return patchx_toolkit.main(args)
+    from patchx_core.cli import main as core_main
+    return core_main(args)
 
 if __name__ == "__main__":
     sys.exit(main())

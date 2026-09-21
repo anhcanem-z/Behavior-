@@ -30,6 +30,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from .elf_expander import extend_elf_with_string
+    from .xref_hunter import hunt_and_patch_multiple_xrefs
+    ADVANCED_BYPASS_AVAILABLE = True
+except (ImportError, ValueError):
+    ADVANCED_BYPASS_AVAILABLE = False
+
 # ---- hằng số ELF ----
 ELFMAG = b"\x7fELF"
 SHT_PROGBITS = 1
@@ -52,6 +59,8 @@ class StringHit:
     size: int         # độ dài chuỗi tính cả NUL (bytes)
     source: str       # "section" | "segment"
 
+
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "file_offset": self.file_offset,
@@ -70,6 +79,14 @@ class ElfReader:
     (ELF dạng ET_DYN có vaddr bắt đầu từ 0), nên lúc runtime chỉ cần
     Module.findBaseAddress(name).add(rva).
     """
+
+
+    def is_aarch64(self) -> bool:
+        """Kiểm tra xem file ELF có phải kiến trúc AArch64 không."""
+        if len(self.data) < 20: return False
+        import struct
+        e_machine = struct.unpack('<H', self.data[18:20])[0]
+        return e_machine == 183 # EM_AARCH64
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -615,12 +632,14 @@ def patch_so_file(so_path: str | Path,
                   out_path: Optional[str | Path] = None,
                   allow_overflow: bool = False,
                   backup: bool = True,
-                  backup_dir: Optional[str | Path] = None) -> Dict[str, Any]:
+                  backup_dir: Optional[str | Path] = None,
+                  advanced_bypass: bool = False) -> Dict[str, Any]:
     """Chèn chuỗi mới TRỰC TIẾP vào file .so (patch file, không cần Frida).
 
     Khác rodata-patch (Frida RAM): patch file bị GIỚI HẠN độ dài — chuỗi mới
     không được dài hơn dung lượng chuỗi cũ (tính tới NUL), nếu không sẽ phá
-    cấu trúc file. Khi vượt: báo lỗi trừ khi allow_overflow=True (rủi ro).
+    cấu trúc file. Khi vượt: báo lỗi trừ khi allow_overflow=True (rủi ro) hoặc
+    advanced_bypass=True (mở rộng ELF + vá XREF tự động trên AArch64).
 
     - mode pointer / runtime_scan: KHÔNG áp được vào file (pointer cần
       relocation lúc load; runtime_scan cần RAM) — báo lỗi rõ.
@@ -658,12 +677,26 @@ def patch_so_file(so_path: str | Path,
             old_end = file_offset + cap
 
         if len(new_bytes) > cap and not allow_overflow:
-            raise ValueError(
-                "Chuỗi mới (%dB) dài hơn dung lượng tại offset 0x%x (%dB) — "
-                "patch file không nới dài được (khác Frida RAM). Dùng "
-                "--allow-overflow nếu chấp nhận tràn, hoặc rodata-patch "
-                "(--mode pointer) để sinh script Frida." % (
-                    len(new_bytes), file_offset, cap))
+            use_adv = advanced_bypass or npatch.get("advanced_bypass", False)
+            if use_adv and ADVANCED_BYPASS_AVAILABLE and reader.is_aarch64():
+                report["patched"].append({
+                    "rva": rva,
+                    "file_offset": file_offset,
+                    "section": section,
+                    "old_value": npatch.get("old_string", ""),
+                    "new_value": npatch["new_string"],
+                    "new_bytes": len(new_bytes),
+                    "capacity": cap,
+                    "overflow": True,
+                    "advanced_bypass": True,
+                })
+                continue
+            else:
+                raise ValueError(
+                    "Chuỗi mới (%dB) dài hơn dung lượng tại offset 0x%x (%dB) — "
+                    "Dùng luồng ĐỘNG (Frida RAM) hoặc bật Advanced Bypass trên AArch64." % (
+                        len(new_bytes), file_offset, cap))
+
 
         old_value = reader.data[file_offset:old_end].decode("utf-8",
                                                             "replace")
@@ -699,4 +732,19 @@ def patch_so_file(so_path: str | Path,
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(bytes(data))
     report["out"] = str(target)
+    
+    # Thực thi Advanced Static Bypass sau khi đã ghi file
+    advanced_patches = [p for p in report["patched"] if p.get("advanced_bypass")]
+    if advanced_patches:
+        rva_map = {}
+        for p in advanced_patches:
+            new_rva = extend_elf_with_string(target, p["new_value"].encode("utf-8"))
+            p["new_rva"] = new_rva
+            rva_map[p["rva"]] = new_rva
+        
+        # Vá tất cả XREF trong 1 pass
+        xrefs = hunt_and_patch_multiple_xrefs(str(target), rva_map)
+        for p in advanced_patches:
+            p["xrefs_patched"] = xrefs.get(p["rva"], 0)
+            
     return report

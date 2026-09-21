@@ -339,6 +339,46 @@ apk-patch --fast (Toolkit Pipeline)
        python3 patchx_toolkit.py apk-patch app.apk --fast \
            --dex-str "old_val=new_val" --axml "old_pkg=new_pkg" --arsc "OldApp=NewApp"
 
+apk-build (Toolkit Pipeline) — có bước 1.5 chặn VerifyError
+   Build nhanh: xác thực hình dạng smali → CỔNG NGỮ NGHĨA (bước 1.5) → resource →
+   apktool b → zipalign → ký → verify. Bước 1.5 chặn build khi có lỗi "đọc thanh ghi
+   chưa gán trên một đường đi nào đó" (nguyên nhân thật của VerifyError khi mở app):
+       python3 patchx_toolkit.py apk-build outputs/apk/apk-trees/2_src
+       python3 patchx_toolkit.py apk-build <cây> --cong-ngu-nghia-all   # quét cả tệp chưa vá
+       python3 patchx_toolkit.py apk-build <cây> --bo-cong-ngu-nghia    # bỏ qua có chủ ý
+   Báo cáo: outputs/apk/apk-build/apk_build_report.json (mục "cong_ngu_nghia").
+   Cổng này nay cũng được móc vào: apk-patch (bước 4.5), apk-debug (không cần build),
+   apk-full (bước 4.5). Cả 4 lệnh đều nhận --bo-cong-ngu-nghia / --cong-ngu-nghia-all.
+
+kiem-tra-verify (cổng ngữ nghĩa smali, chạy riêng)
+   Kiểm NGỮ NGHĨA smali: N1 = đọc thanh ghi chưa gán (LỖI, chặn build);
+   N2 = vùng vá ghi đè thanh ghi mà đoạn ngoài vùng vá còn đọc (CẢNH BÁO).
+       python3 tools/kiem_tra_verify.py --tu-kiem                 # tự kiểm 3 chiều (dương/âm/chê lỗi)
+       python3 tools/kiem_tra_verify.py --tree Apks/2             # chỉ tệp có dấu # PATCHX (~0,5 giây)
+       python3 tools/kiem_tra_verify.py --tree Apks/2 --all       # cả cây (~38 giây, 12.196 tệp)
+       python3 tools/kiem_tra_verify.py --file <tệp.smali> --json  # 1 tệp, xuất JSON
+       python3 tools/kiem_tra_verify.py --do-lech <tệp.smali> --ham startTranslation --pc 0x8E
+   Lỗi in kèm độ lệch code-unit (pc) để đối chiếu thẳng với mã máy ảo ART và đường đi thiếu gán.
+   In kèm thời gian tách riêng (tìm tệp / phân tích / tổng). Tìm tệp dùng `grep -rl` khi có,
+   có đối chứng cho thấy hai đường cho cùng danh sách tệp (không bỏ sót tệp đã vá).
+
+kiem-cong-cu (cổng tự kiểm công cụ + sổ "tin dùng")
+   Chống đúng loại sai 2026-09-20: bàn giao một công cụ chưa tự chứng minh rồi đem tin dùng.
+   Quy tắc: công cụ chỉ được quyền CHẶN build khi sổ "tin dùng" cho phép; chưa có sổ thì
+   nó phải tự kiểm đạt ngay tại chỗ; tự kiểm hỏng thì chỉ được CHẠY BÓNG (cảnh báo, không chặn).
+       python3 tools/kiem_cong_cu.py                       # quét + in bảng trạng thái
+       python3 tools/kiem_cong_cu.py --quet --ghi-so       # quét, chạy tự kiểm, ghi sổ
+       python3 tools/kiem_cong_cu.py --dat-tin-dung <tệp> --nguon User --ly-do "..."
+       python3 tools/kiem_cong_cu.py --dat-canh-bao <tệp> --ly-do "..."   # hạ xuống chạy bóng
+       python3 tools/kiem_cong_cu.py --json
+   Sổ: outputs/cong_cu/trang_thai.json (mã băm từng công cụ; sửa tệp ⇒ tự hạ về chưa_kiem).
+   CHỈ User được nâng lên "tin_dung" (lệnh sẽ từ chối nếu --nguon khác User).
+   Thoát mã 1 nếu có công cụ đang CHẶN mà chưa tự kiểm đạt.
+
+doc-dex / song-thanh-ghi (công cụ đọc, KHÔNG dùng làm cổng chặn)
+       python3 tools/doc_dex.py <tệp.dex> <class> <method>     # kiểm chứng bản vá nằm trong APK
+       python3 tools/song_thanh_ghi.py <tệp.smali> <hàm> <dòng> ...  # đo thanh ghi còn sống
+
 smart-combo
    Tự động sinh combo patch tối ưu từ Active Learning (AST Smali + combos_success.json):
        python3 patchx smart-combo outputs/apk/apk-trees/a_src --intent bypass-license -o combos/
@@ -380,3 +420,95 @@ auto-refresh (alias: auto-session, auto-reset-translation)
 
 
 
+
+
+dag
+   Xem và chạy các quy trình theo DAG Dependency Engine + Pipeline Registry:
+       python3 patchx dag --list
+       python3 patchx dag --inspect auto
+       python3 patchx dag --mermaid auto
+       python3 patchx dag --run fast app.apk
+
+packet
+   Bộ công cụ an ninh mạng gói tin tích hợp trong Toolkit:
+       python3 patchx packet guard --demo
+       python3 patchx packet guard --attack-tamper
+       python3 patchx packet forge demo
+       python3 patchx packet forge inject --host 127.0.0.1 --port 9000 --text "PING"
+       python3 patchx packet arena
+       python3 patchx packet middleware --host 127.0.0.1 --port 9999
+       python3 -m patchx_core.packet_security forge fuzz --text "SAMPLE" --rate 0.05
+
+neon-bench
+   Đo tốc độ GB/s THẬT của đường quét NEON ARM64 so với Python thuần (biên dịch clang -O3 tại chỗ, tự rơi về Python nếu thất bại):
+       python3 patchx neon-bench --size-mb 64 --iterations 3
+       python3 patchx neon-bench -o outputs/behavior/neon_bench.json
+
+smart-scan (nâng cấp NEON)
+   Đường quét chuỗi mặc định tự dùng kernel NEON native nếu biên dịch được; điều khiển bằng:
+       python3 patchx smart-scan lib.so --native          # bắt buộc NEON
+       python3 patchx smart-scan lib.so --no-native       # Python thuần
+       python3 patchx smart-scan --benchmark 64           # đo NEON vs Python rồi thoát
+   Lệnh start-scan cũng nhận --native/--no-native và in số lib chạy từng động cơ.
+
+unflatten
+   Gỡ phẳng luồng mã bị làm rối kiểu switch-case (R8/DexGuard) và cắt tỉa khối chết; mặc định chỉ phân tích:
+       python3 patchx unflatten Cay.smali
+       python3 patchx unflatten outputs/apk/apk-trees/app --apply --limit 200
+       python3 patchx unflatten Cay.smali --apply -o outputs/unflatten_report.json
+   Khi --apply, mỗi tệp được sao lưu .bak vào outputs/backup/unflatten/ trước khi ghi.
+
+autopilot (nâng cấp toàn trình qua DAG)
+   Tự hành 1-chạm: tiếp nhận -> giải mã(tùy chọn) -> vá toàn vẹn 4 tầng -> cổng bảo vệ
+   -> mạng NSC/SSL -> mã máy .so -> gỡ phẳng -> kiểm chứng Micro-DEX -> đóng gói & ký số:
+       python3 patchx autopilot app.apk --network --native-patch --decompile
+       python3 patchx autopilot cay_smali --network --native-patch --unflatten --package
+       python3 patchx autopilot app.apk --dry-run                       # chỉ phân tích, không ghi
+       python3 patchx autopilot app.apk --no-package                    # bỏ bước đóng gói
+       python3 patchx dag --run autopilot app.apk                       # chạy qua sổ bộ DAG
+
+auto-gate
+   Tự động can thiệp các cổng an ninh bằng bộ sửa mã trung gian và kiểm chứng Micro-DEX:
+       python3 patchx auto-gate outputs/apk/apk-trees/app
+
+network-bypass
+   Đột phá tầng mạng: mở khóa Network Security Config, cho phép chứng chỉ người dùng,
+   bật lưu lượng thô và sinh kịch bản vô hiệu hóa SSL Pinning đa tầng:
+       python3 patchx network-bypass app.apk
+       python3 patchx network-bypass outputs/apk/apk-trees/app
+
+native-auto-patch
+   Đột phá tầng thư viện máy: quét chốt chặn Anti-Root/Anti-Debug/endpoint và đột biến
+   nhị phân zero-drift (không lệch kích thước), kèm sinh kịch bản Frida:
+       python3 patchx native-auto-patch --so-dir lib
+       python3 patchx native-auto-patch --apk app.apk
+
+precompile
+   Tiền biên dịch toàn bộ mã nguồn hệ thống sang bytecode tối ưu song song trên 8 nhân CPU:
+       python3 patchx precompile
+       python3 patchx precompile --workers 8 --optimize 1
+
+integrity-gate
+   Một cổng kiểm tra toàn vẹn xuyên tầng G1..G5 (vân tay/neo -> cấu trúc ->
+   ngữ nghĩa Micro-DEX -> hành vi -> chống báo đạt giả) cho smali/DEX/ELF/APK/cây:
+       python3 patchx integrity-gate Cay.smali
+       python3 patchx integrity-gate classes.dex
+       python3 patchx integrity-gate libnative.so
+       python3 patchx integrity-gate app.apk -o outputs/gate_report.json
+
+ast-dsl
+   Vá ngữ nghĩa bằng ngôn ngữ quy tắc trên cây AST Smali (tìm mẫu -> ràng buộc
+   thanh ghi/kiểu -> biến đổi AST -> in lại smali hợp lệ), miễn nhiễm đổi tên:
+       python3 patchx ast-dsl Cay.smali --rules rules.json                # chỉ phân tích
+       python3 patchx ast-dsl Cay.smali --rules rules.json --apply        # ghi thật (tự .bak)
+       python3 patchx ast-dsl cay_smali --rules rules.json -o outputs/ast_dsl.json
+   Quy tắc JSON ví dụ:
+       {"ten":"mo-khoa","phuong_thuc":"check.*","opcode":"if-eqz",
+        "toan_hang":":cond_fail","hanh_dong":"dao-nhanh"}
+       {"ten":"tra-true","phuong_thuc":"isPremium","hanh_dong":"ep-tra-ve","gia_tri":true}
+
+dex-method
+   Trình sửa DEX ở mức phương thức: xem bản đồ tên->lệnh hoặc vá opcode cùng độ dài (tự tính lại chữ ký):
+       python3 patchx dex-method classes.dex --map
+       python3 patchx dex-method classes.dex --method "isVip" --swap "1200=1201" --apply
+       python3 patchx dex-method classes.dex -o outputs/dex_method_report.json

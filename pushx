@@ -40,17 +40,17 @@ def print_banner():
     WHT = "\033[97m"
     w = 78
     print(f"""{BLD}{YEL}╔{'═' * (w - 2)}╗{RST}
-{BLD}{YEL}║{RST}   {BLD}{WHT}PUSHX — BẢN KẾ THỪA PATCHX CỔ ĐIỂN (LEGACY & COMPATIBILITY BRIDGE){RST}{' ' * 7}{BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {BLD}{WHT}PUSHX — ĐIỂM ĐIỀU KHIỂN VÀ CẦU NỐI CÁC CÔNG CỤ CỦA PATCHX{RST}{' ' * 19}{BLD}{YEL}║{RST}
 {BLD}{YEL}╠{'═' * (w - 2)}╣{RST}
-{BLD}{YEL}║{RST} {DIM}Điểm vào kế thừa bảo tồn đầy đủ các tính năng cổ điển của patchx:{RST}{' ' * 9}{BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx doctor{RST}          Chẩn đoán môi trường, công cụ và bộ patch        {BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx run{RST}             Chạy toàn bộ quy trình thông minh cổ điển        {BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx package{RST}         Đóng gói phân phối toolkit                       {BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx install-deps{RST}    Cài đặt công cụ phụ thuộc hệ thống               {BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx apk-full{RST}        Quy trình xử lý APK cổ điển trọn gói             {BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx webui{RST}           Khởi động giao diện WebUI trực quan              {BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {CYN}•{RST} {BLD}pushx <LỆNH> ...{RST}      Gọi trực tiếp bất kỳ lệnh nào trong 7 nhóm PatchX{BLD}{YEL}║{RST}
-{BLD}{YEL}║{RST}   {CYN}•{RST} {BLD}pushx -h / --help{RST}     Xem trợ giúp đầy đủ phân theo 7 nhóm tối ưu      {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST} {DIM}Điểm điều phối kế thừa bảo tồn đầy đủ các tính năng của hệ thống:{RST}{' ' * 11}{BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx doctor{RST}          Kiểm tra sức khỏe môi trường và các công cụ       {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx run{RST}             Chạy toàn bộ quy trình tự động từ đầu đến cuối   {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx package{RST}         Đóng gói bộ công cụ gọn gàng để chuyển giao      {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx install-deps{RST}    Cài đặt đầy đủ các phần mềm bổ trợ cho hệ thống   {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx apk-full{RST}        Quy trình xử lý ứng dụng trọn gói (tháo -> sửa -> ráp){BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {GRN}•{RST} {BLD}pushx webui{RST}           Khởi động giao diện màn hình web trực quan        {BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {CYN}•{RST} {BLD}pushx <LỆNH> ...{RST}      Gọi trực tiếp bất kỳ lệnh nào trong 7 nhóm công việc{BLD}{YEL}║{RST}
+{BLD}{YEL}║{RST}   {CYN}•{RST} {BLD}pushx -h / --help{RST}     Xem hướng dẫn đầy đủ bằng tiếng Việt dễ hiểu     {BLD}{YEL}║{RST}
 {BLD}{YEL}╚{'═' * (w - 2)}╝{RST}""")
 
 

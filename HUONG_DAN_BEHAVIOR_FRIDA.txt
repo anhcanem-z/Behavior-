@@ -955,3 +955,34 @@ GHI CHÚ
 
 - Đầu ra mặc định: outputs/behavior/smart_scan/ (*.json + *.md); nếu dùng
   --keep-so, lib trích từ APK nằm tại outputs/behavior/smart_scan/so_extract/.
+
+======================================================================
+integrity-decouple — Triệt tiêu toàn vẹn 4 tầng (AIDM)
+======================================================================
+
+Công dụng: Hợp nhất 4 mũi nhọn triệt tiêu kiểm soát toàn vẹn của ứng dụng:
+  1. Tầng Java: thay getInstallerPackageName() -> "com.android.vending",
+     ép hàm kiểm chữ ký trả True.
+  2. Tầng tự đọc APK/DEX: vô hiệu System.exit/killProcess, đảo nhánh kiểm tra.
+  3. Tầng Native: đồng bộ SHA-256 chữ ký gốc vào toàn cây lib .so.
+  4. Tầng Play Integrity: sinh hook Frida client-side + stub smali.
+
+Chạy:
+    python3 patchx integrity-decouple <CÂY_SMALI|TỆP.smali|APK> [TÙY CHỌN]
+
+Tùy chọn:
+    --orig-apk APK_GỐC   APK gốc để trích chữ ký (bắt buộc cho tầng Native).
+    --new-apk APK_MỚI    APK đã can thiệp để đồng bộ mã băm chữ ký Native.
+    --so-dir THƯ_MỤC     Thư mục chứa lib .so đã giải nén.
+    --spearheads 1,2,3,4 Chỉ chạy mũi nhọn mong muốn (mặc định all).
+    --dry-run            Chỉ phân tích, không ghi tệp.
+    -o THƯ_MỤC_XUẤT      Thư mục xuất báo cáo và hook.
+
+Ví dụ:
+    python3 patchx integrity-decouple outputs/apk/apk-trees/app --dry-run
+    python3 patchx integrity-decouple outputs/apk/apk-trees/app \
+        --orig-apk goc.apk --new-apk da_mod.apk \
+        --so-dir outputs/apk/apk-trees/app/lib --spearheads all
+
+Lưu ý trung thực: Play Integrity là xác thực phía máy chủ; lớp giả lập phía
+client chỉ bỏ chặn ở ứng dụng, KHÔNG tạo được token hợp lệ từ Google.

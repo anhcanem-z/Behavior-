@@ -1,15 +1,1 @@
-from .cfg import (
-    CFGBuilder,
-    ControlFlowGraph,
-    BasicBlock,
-    Instruction,
-    build_cfg,
-)
-
-__all__ = [
-    "CFGBuilder",
-    "ControlFlowGraph",
-    "BasicBlock",
-    "Instruction",
-    "build_cfg",
-]
+__version__ = '1.0.0'
